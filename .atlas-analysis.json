@@ -1,0 +1,138 @@
+{
+  "projectType": "saas",
+  "projectName": "Ticket Hub",
+  "projectDescription": "A modern ticket marketplace platform where users can buy and sell event tickets with integrated payments and queue management.",
+  "theme": "palm",
+  "primaryColor": "#6366F1",
+  "lightColor": "#818CF8",
+  "darkColor": "#4F46E5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "introduction",
+              "features"
+            ]
+          },
+          {
+            "group": "Getting Started",
+            "pages": [
+              "getting-started/quickstart",
+              "getting-started/authentication",
+              "getting-started/environment-setup"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/event-management",
+              "features/ticket-purchasing",
+              "features/waiting-list",
+              "features/seller-dashboard"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/stripe-payments",
+              "integrations/clerk-auth",
+              "integrations/convex-database"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-events",
+              "guides/buying-tickets",
+              "guides/selling-tickets",
+              "guides/managing-refunds"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Events",
+            "pages": [
+              "api/events/overview",
+              "api/events/create",
+              "api/events/update",
+              "api/events/cancel",
+              "api/events/search"
+            ]
+          },
+          {
+            "group": "Tickets",
+            "pages": [
+              "api/tickets/overview",
+              "api/tickets/purchase",
+              "api/tickets/get-user-tickets",
+              "api/tickets/update-status"
+            ]
+          },
+          {
+            "group": "Waiting List",
+            "pages": [
+              "api/waiting-list/overview",
+              "api/waiting-list/join",
+              "api/waiting-list/get-position",
+              "api/waiting-list/process-queue"
+            ]
+          },
+          {
+            "group": "Users",
+            "pages": [
+              "api/users/overview",
+              "api/users/get-user",
+              "api/users/stripe-connect"
+            ]
+          },
+          {
+            "group": "Actions",
+            "pages": [
+              "api/actions/stripe-checkout",
+              "api/actions/stripe-connect",
+              "api/actions/refunds"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Event creation and management with image uploads",
+    "Real-time ticket purchasing with Stripe integration",
+    "Smart waiting list with automatic queue processing",
+    "Seller dashboard with revenue analytics",
+    "Stripe Connect for marketplace payments",
+    "Rate limiting and fraud prevention",
+    "QR code ticket generation",
+    "Event search and discovery"
+  ],
+  "publicApiSurface": [
+    "events.get - Get all active events",
+    "events.getById - Get event by ID",
+    "events.create - Create new event",
+    "events.update - Update event details",
+    "events.cancel - Cancel event",
+    "events.search - Search events",
+    "events.joinWaitingList - Join event waiting list",
+    "events.purchaseTicket - Purchase ticket for event",
+    "events.getEventAvailability - Get ticket availability",
+    "events.getSellerEvents - Get seller's events with metrics",
+    "tickets.getUserTicketForEvent - Get user's ticket for specific event",
+    "tickets.getTicketWithDetails - Get ticket with event details",
+    "tickets.updateTicketStatus - Update ticket status",
+    "users.getUsersStripeConnectId - Get user's Stripe Connect ID",
+    "waiting_list.getQueuePosition - Get position in waiting list",
+    "createStripeCheckoutSession - Create payment session",
+    "createStripeConnectCustomer - Create Stripe Connect customer",
+    "refundEventTicket - Process ticket refund"
+  ]
+}
