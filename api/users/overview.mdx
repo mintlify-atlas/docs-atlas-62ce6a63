@@ -1,0 +1,95 @@
+---
+title: "Users API Overview"
+description: "Manage user data with Clerk integration and Stripe Connect"
+---
+
+## Introduction
+
+The Users API provides endpoints for managing user data in Ticket Hub. Users are automatically created and synced via Clerk webhooks, ensuring seamless authentication and user management.
+
+## User Schema
+
+Users in Ticket Hub have the following structure:
+
+<ResponseField name="_id" type="Id<'users'>" required>
+  Convex-generated unique identifier for the user
+</ResponseField>
+
+<ResponseField name="userId" type="string" required>
+  Clerk user ID - the primary identifier from Clerk authentication
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Full name of the user (first name + last name from Clerk)
+</ResponseField>
+
+<ResponseField name="email" type="string" required>
+  Primary email address from Clerk
+</ResponseField>
+
+<ResponseField name="phone" type="string">
+  Phone number from Clerk (optional)
+</ResponseField>
+
+<ResponseField name="stripeConnectId" type="string">
+  Stripe Connect account ID for event organizers who want to receive payments
+</ResponseField>
+
+## Clerk Integration
+
+Ticket Hub uses [Clerk](https://clerk.com) for authentication and user management. User data is automatically synced through webhooks:
+
+### User Creation Flow
+
+1. User signs up through Clerk authentication
+2. Clerk sends a webhook to your application
+3. The `upsertUserFromClerk` internal mutation processes the webhook
+4. User is created or updated in the Convex database
+
+### Webhook Handler
+
+The `upsertUserFromClerk` mutation extracts the following data from Clerk:
+
+- **userId**: Clerk user ID (`data.id`)
+- **email**: Primary email address
+- **phone**: Primary phone number (if provided)
+- **name**: Combination of first and last name
+
+### User Updates
+
+When a user updates their profile in Clerk, the same webhook mechanism ensures the Convex database stays in sync.
+
+## Stripe Connect Integration
+
+Event organizers can connect their Stripe accounts to receive payments directly. The `stripeConnectId` field stores the Stripe Connect account ID.
+
+### Use Cases
+
+- **Event Creation**: Organizers with Stripe Connect accounts can create paid events
+- **Payment Routing**: Payments are routed to the organizer's connected Stripe account
+- **Payout Management**: Organizers manage payouts through their Stripe dashboard
+
+## Available Queries
+
+<Card title="Get User by ID" icon="user" href="/api/users/get-user">
+  Retrieve user information by Clerk user ID
+</Card>
+
+<Card title="Get Stripe Connect ID" icon="stripe" href="/api/users/stripe-connect">
+  Retrieve a user's Stripe Connect account ID
+</Card>
+
+## Database Indexes
+
+The users table includes the following indexes for efficient querying:
+
+- `by_user_id`: Query by Clerk userId
+- `by_email`: Query by email address
+
+## Internal Mutations
+
+The following mutations are internal-only and called by webhooks:
+
+- `upsertUserFromClerk`: Create or update user from Clerk webhook
+- `deleteUser`: Delete user when removed from Clerk
+- `updateOrCreateUserStripeConnectId`: Update Stripe Connect ID for event organizers

@@ -1,0 +1,415 @@
+---
+title: 'Event Management'
+description: 'Create, update, and manage events in Ticket Hub'
+icon: 'calendar'
+---
+
+Ticket Hub provides a comprehensive event management system for event organizers to create, update, and cancel events with full control over ticketing.
+
+## Event Schema
+
+Events are stored in the Convex database with the following schema:
+
+<CodeGroup>
+```typescript convex/schema.ts
+events: defineTable({
+  name: v.string(),
+  description: v.string(),
+  location: v.string(),
+  eventDate: v.number(),
+  price: v.number(),
+  totalTickets: v.number(),
+  userId: v.string(),
+  imageStorageId: v.optional(v.id("_storage")),
+  is_cancelled: v.optional(v.boolean()),
+})
+```
+</CodeGroup>
+
+## Creating Events
+
+<Tabs>
+  <Tab title="User Flow">
+    Event creation follows a structured workflow that validates all required fields and handles image uploads.
+
+    <Steps>
+      <Step title="Fill Event Details">
+        Users provide essential event information including name, description, location, date, price, and total tickets available.
+        
+        The form uses Zod validation to ensure data integrity:
+        ```typescript
+        const formSchema = z.object({
+          name: z.string().min(1, "Event name is required"),
+          description: z.string().min(1, "Description is required"),
+          location: z.string().min(1, "Location is required"),
+          eventDate: z.date().min(
+            new Date(new Date().setHours(0, 0, 0, 0)),
+            "Event date must be in the future"
+          ),
+          price: z.number().min(0, "Price must be 0 or greater"),
+          totalTickets: z.number().min(1, "Must have at least 1 ticket"),
+        });
+        ```
+      </Step>
+
+      <Step title="Upload Event Image (Optional)">
+        Organizers can upload an event image that will be displayed on the event page and ticket.
+        
+        The image upload process:
+        1. Generate an upload URL from Convex storage
+        2. Upload the file to Convex
+        3. Store the storage ID reference in the event record
+      </Step>
+
+      <Step title="Submit and Create">
+        The event is created in the database and the organizer is redirected to the event page.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Implementation">
+    ### Event Creation Mutation
+
+    Located in `convex/events.ts:43-65`:
+
+    ```typescript
+    export const create = mutation({
+      args: {
+        name: v.string(),
+        description: v.string(),
+        location: v.string(),
+        eventDate: v.number(), // Store as timestamp
+        price: v.number(),
+        totalTickets: v.number(),
+        userId: v.string(),
+      },
+      handler: async (ctx, args) => {
+        const eventId = await ctx.db.insert("events", {
+          name: args.name,
+          description: args.description,
+          location: args.location,
+          eventDate: args.eventDate,
+          price: args.price,
+          totalTickets: args.totalTickets,
+          userId: args.userId,
+        });
+        return eventId;
+      },
+    });
+    ```
+
+    ### Event Form Component
+
+    The `EventForm` component (src/components/event-form.tsx) handles both creation and editing:
+
+    ```typescript
+    async function onSubmit(values: FormData) {
+      if (!user?.id) return;
+
+      startTransition(async () => {
+        try {
+          let imageStorageId = null;
+
+          // Handle image upload
+          if (selectedImage) {
+            imageStorageId = await handleImageUpload(selectedImage);
+          }
+
+          if (mode === "create") {
+            const eventId = await createEvent({
+              ...values,
+              userId: user.id,
+              eventDate: values.eventDate.getTime(),
+            });
+
+            if (imageStorageId) {
+              await updateEventImage({
+                eventId,
+                storageId: imageStorageId as Id<"_storage">,
+              });
+            }
+
+            router.push(`/event/${eventId}`);
+          }
+        } catch (error) {
+          toast.error("Failed to create event");
+        }
+      });
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Updating Events
+
+<Note>
+Organizers can only update events that they created. The system validates ownership before allowing modifications.
+</Note>
+
+### Update Constraints
+
+When updating an event, the following rules apply:
+
+- **Total Tickets**: Cannot be reduced below the number of tickets already sold
+- **Price**: Can be changed but doesn't affect existing purchases
+- **Date**: Can be rescheduled to any future date
+- **Image**: Can be added, replaced, or removed
+
+<CodeGroup>
+```typescript convex/events.ts (Update Mutation)
+export const updateEvent = mutation({
+  args: {
+    eventId: v.id("events"),
+    name: v.string(),
+    description: v.string(),
+    location: v.string(),
+    eventDate: v.number(),
+    price: v.number(),
+    totalTickets: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { eventId, ...updates } = args;
+
+    // Get current event to check tickets sold
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error("Event not found");
+
+    const soldTickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "valid"), q.eq(q.field("status"), "used"))
+      )
+      .collect();
+
+    // Ensure new total tickets is not less than sold tickets
+    if (updates.totalTickets < soldTickets.length) {
+      throw new Error(
+        `Cannot reduce total tickets below ${soldTickets.length} (number of tickets already sold)`
+      );
+    }
+
+    await ctx.db.patch(eventId, updates);
+    return eventId;
+  },
+});
+```
+</CodeGroup>
+
+## Image Upload Functionality
+
+Event images are stored in Convex's built-in file storage system.
+
+<Steps>
+  <Step title="Generate Upload URL">
+    Request a temporary upload URL from Convex:
+    ```typescript
+    const postUrl = await generateUploadUrl();
+    ```
+  </Step>
+
+  <Step title="Upload File">
+    POST the image file to the generated URL:
+    ```typescript
+    const result = await fetch(postUrl, {
+      method: "POST",
+      headers: { "Content-Type": file.type },
+      body: file,
+    });
+    const { storageId } = await result.json();
+    ```
+  </Step>
+
+  <Step title="Link to Event">
+    Store the storage ID in the event record:
+    ```typescript
+    await updateEventImage({
+      eventId,
+      storageId: imageStorageId as Id<"_storage">,
+    });
+    ```
+  </Step>
+</Steps>
+
+### Image Preview Component
+
+From `src/components/event-form.tsx:324-346`:
+
+```typescript
+{imagePreview || (!removedCurrentImage && currentImageUrl) ? (
+  <div className="relative w-32 aspect-square bg-gray-100 rounded-lg">
+    <Image
+      src={imagePreview || currentImageUrl!}
+      alt="Preview"
+      fill
+      className="object-contain rounded-lg"
+    />
+    <button
+      type="button"
+      onClick={() => {
+        setSelectedImage(null);
+        setImagePreview(null);
+        setRemovedCurrentImage(true);
+        if (imageInput.current) {
+          imageInput.current.value = "";
+        }
+      }}
+      className="absolute cursor-pointer -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6"
+    >
+      ×
+    </button>
+  </div>
+) : (
+  <input
+    type="file"
+    accept="image/*"
+    onChange={handleImageChange}
+    ref={imageInput}
+  />
+)}
+```
+
+## Cancelling Events
+
+<Warning>
+Event cancellation is permanent and requires that all tickets be refunded first.
+</Warning>
+
+### Cancellation Requirements
+
+<AccordionGroup>
+  <Accordion title="No Active Tickets">
+    All valid and used tickets must be refunded before an event can be cancelled. This protects both buyers and sellers.
+    
+    ```typescript
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "valid"), q.eq(q.field("status"), "used"))
+      )
+      .collect();
+
+    if (tickets.length > 0) {
+      throw new Error(
+        "Cannot cancel event with active tickets. Please refund all tickets first."
+      );
+    }
+    ```
+  </Accordion>
+
+  <Accordion title="Waiting List Cleanup">
+    When an event is cancelled, all waiting list entries are automatically deleted:
+    
+    ```typescript
+    const waitingListEntries = await ctx.db
+      .query("waitingList")
+      .withIndex("by_event_status", (q) => q.eq("eventId", eventId))
+      .collect();
+
+    for (const entry of waitingListEntries) {
+      await ctx.db.delete(entry._id);
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Cancel Event Mutation
+
+From `convex/events.ts:468-506`:
+
+```typescript
+export const cancelEvent = mutation({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error("Event not found");
+
+    // Get all valid tickets for this event
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "valid"), q.eq(q.field("status"), "used"))
+      )
+      .collect();
+
+    if (tickets.length > 0) {
+      throw new Error(
+        "Cannot cancel event with active tickets. Please refund all tickets first."
+      );
+    }
+
+    // Mark event as cancelled
+    await ctx.db.patch(eventId, {
+      is_cancelled: true,
+    });
+
+    // Delete any waiting list entries
+    const waitingListEntries = await ctx.db
+      .query("waitingList")
+      .withIndex("by_event_status", (q) => q.eq("eventId", eventId))
+      .collect();
+
+    for (const entry of waitingListEntries) {
+      await ctx.db.delete(entry._id);
+    }
+
+    return { success: true };
+  },
+});
+```
+
+## Event Queries
+
+### Get All Events
+
+Retrieve all non-cancelled events:
+
+```typescript
+export const get = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("is_cancelled"), undefined))
+      .collect();
+  },
+});
+```
+
+### Search Events
+
+Search by name, description, or location (convex/events.ts:370-387):
+
+```typescript
+export const search = query({
+  args: { searchTerm: v.string() },
+  handler: async (ctx, { searchTerm }) => {
+    const events = await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("is_cancelled"), undefined))
+      .collect();
+
+    return events.filter((event) => {
+      const searchTermLower = searchTerm.toLowerCase();
+      return (
+        event.name.toLowerCase().includes(searchTermLower) ||
+        event.description.toLowerCase().includes(searchTermLower) ||
+        event.location.toLowerCase().includes(searchTermLower)
+      );
+    });
+  },
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Ticket Purchasing" icon="ticket" href="/features/ticket-purchasing">
+    Learn how users purchase tickets for events
+  </Card>
+  <Card title="Seller Dashboard" icon="chart-line" href="/features/seller-dashboard">
+    Track event performance and revenue
+  </Card>
+</CardGroup>

@@ -1,0 +1,80 @@
+---
+title: "Welcome to Ticket Hub"
+description: "A modern ticket marketplace platform for buying and selling event tickets"
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Ticket Hub Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Ticket Hub Hero Dark"
+/>
+
+## What is Ticket Hub?
+
+Ticket Hub is a full-stack SaaS platform that enables users to buy and sell event tickets securely. Built with Next.js, Convex, and Stripe, it provides a complete marketplace experience with real-time inventory management, payment processing, and intelligent queue management.
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Event Management" icon="calendar" href="/features/event-management">
+    Create and manage events with custom pricing, capacity limits, and event details
+  </Card>
+  <Card title="Smart Waiting List" icon="list-ol" href="/features/waiting-list">
+    Automated queue system with time-limited offers and real-time availability
+  </Card>
+  <Card title="Secure Payments" icon="credit-card" href="/integrations/stripe-payments">
+    Stripe Connect integration for marketplace payments with automatic fee distribution
+  </Card>
+  <Card title="Seller Dashboard" icon="chart-line" href="/features/seller-dashboard">
+    Revenue analytics, ticket sales tracking, and event performance metrics
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Sellers Create Events">
+    Event organizers create listings with details, pricing, and ticket inventory. Each event can have custom capacity limits and event images.
+  </Step>
+  <Step title="Buyers Browse & Purchase">
+    Users discover events through search, join waiting lists when tickets are sold out, and complete purchases through secure Stripe checkout.
+  </Step>
+  <Step title="Queue Management">
+    When tickets become available, users in the waiting list receive time-limited purchase offers automatically.
+  </Step>
+  <Step title="Ticket Validation">
+    Each purchased ticket generates a unique QR code for event entry verification and fraud prevention.
+  </Step>
+</Steps>
+
+## Tech Stack
+
+Ticket Hub is built on modern, scalable technologies:
+
+- **Frontend**: Next.js 15 with React 19 and TypeScript
+- **Backend**: Convex for real-time database and serverless functions
+- **Authentication**: Clerk for secure user management
+- **Payments**: Stripe Connect for marketplace transactions
+- **Styling**: Tailwind CSS with custom theming
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/getting-started/quickstart">
+    Set up your development environment and run Ticket Hub locally
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/events/overview">
+    Explore the complete API documentation for events, tickets, and more
+  </Card>
+  <Card title="Authentication Setup" icon="lock" href="/getting-started/authentication">
+    Configure Clerk authentication for your application
+  </Card>
+  <Card title="Payment Integration" icon="stripe" href="/integrations/stripe-payments">
+    Set up Stripe Connect for marketplace payments
+  </Card>
+</CardGroup>

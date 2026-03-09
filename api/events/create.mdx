@@ -1,0 +1,272 @@
+---
+title: "events.create"
+description: "Create a new event with ticket inventory"
+---
+
+The `events.create` mutation creates a new event in the Ticket Hub platform with the specified details and ticket inventory.
+
+## Function Signature
+
+```typescript
+export const create = mutation({
+  args: {
+    name: v.string(),
+    description: v.string(),
+    location: v.string(),
+    eventDate: v.number(),
+    price: v.number(),
+    totalTickets: v.number(),
+    userId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const eventId = await ctx.db.insert("events", {
+      name: args.name,
+      description: args.description,
+      location: args.location,
+      eventDate: args.eventDate,
+      price: args.price,
+      totalTickets: args.totalTickets,
+      userId: args.userId,
+    });
+    return eventId;
+  },
+});
+```
+
+**Source**: `convex/events.ts:43-65`
+
+## Parameters
+
+<ParamField path="name" type="string" required>
+  The name of the event. Must be a non-empty string.
+  
+  **Example**: `"Summer Music Festival 2026"`
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  A detailed description of the event. Must be a non-empty string.
+  
+  **Example**: `"Join us for an unforgettable evening of live music featuring top local artists"`
+</ParamField>
+
+<ParamField path="location" type="string" required>
+  The physical location where the event will take place. Must be a non-empty string.
+  
+  **Example**: `"Central Park Amphitheater, New York, NY"`
+</ParamField>
+
+<ParamField path="eventDate" type="number" required>
+  The date and time of the event as a Unix timestamp in milliseconds.
+  
+  **Example**: `1752624000000` (July 15, 2026)
+  
+  <Tip>
+    Convert JavaScript Date objects to timestamps using `.getTime()`:
+    ```typescript
+    const timestamp = new Date("2026-07-15").getTime();
+    ```
+  </Tip>
+</ParamField>
+
+<ParamField path="price" type="number" required>
+  The price per ticket in dollars. Must be 0 or greater.
+  
+  **Example**: `45.00`
+  
+  <Note>
+    Price can be `0` for free events.
+  </Note>
+</ParamField>
+
+<ParamField path="totalTickets" type="number" required>
+  The total number of tickets available for the event. Must be at least 1.
+  
+  **Example**: `500`
+</ParamField>
+
+<ParamField path="userId" type="string" required>
+  The ID of the user creating the event (event organizer). This should be the authenticated user's ID.
+  
+  **Example**: `"user_2abc123def456"`
+</ParamField>
+
+## Returns
+
+<ResponseField name="eventId" type="Id<'events'>">
+  The unique identifier of the newly created event. Use this ID to reference the event in other API calls.
+</ResponseField>
+
+## Request Example
+
+```typescript
+import { useMutation } from "convex/react";
+import { useUser } from "@clerk/nextjs";
+import { api } from "../convex/_generated/api";
+
+function CreateEventForm() {
+  const { user } = useUser();
+  const createEvent = useMutation(api.events.create);
+
+  const handleSubmit = async (formData) => {
+    try {
+      const eventId = await createEvent({
+        name: formData.name,
+        description: formData.description,
+        location: formData.location,
+        eventDate: formData.eventDate.getTime(), // Convert Date to timestamp
+        price: formData.price,
+        totalTickets: formData.totalTickets,
+        userId: user.id,
+      });
+      
+      console.log("Event created with ID:", eventId);
+      // Redirect to event page
+      router.push(`/event/${eventId}`);
+    } catch (error) {
+      console.error("Failed to create event:", error);
+    }
+  };
+}
+```
+
+**Source**: `src/components/event-form.tsx:117-121`
+
+## Response Example
+
+```typescript
+// Returns the event ID
+"k17abc123def456789"
+```
+
+## Validation Rules
+
+<Warning>
+  The following validation rules are enforced:
+  
+  - **name**: Cannot be empty
+  - **description**: Cannot be empty
+  - **location**: Cannot be empty
+  - **eventDate**: Must be a valid number (timestamp)
+  - **price**: Must be 0 or greater (no negative prices)
+  - **totalTickets**: Must be at least 1
+  - **userId**: Must be a valid string (authenticated user)
+</Warning>
+
+## Post-Creation Actions
+
+After creating an event, you typically want to:
+
+1. **Upload an event image** (optional):
+```typescript
+import { api } from "../convex/_generated/api";
+
+const updateEventImage = useMutation(api.storage.updateEventImage);
+
+// After creating the event
+if (imageStorageId) {
+  await updateEventImage({
+    eventId,
+    storageId: imageStorageId,
+  });
+}
+```
+
+2. **Redirect to the event details page**:
+```typescript
+router.push(`/event/${eventId}`);
+```
+
+## Common Use Cases
+
+### Creating a Free Event
+
+```typescript
+const eventId = await createEvent({
+  name: "Community Cleanup Day",
+  description: "Join us for a neighborhood cleanup initiative",
+  location: "Lincoln Park",
+  eventDate: new Date("2026-06-01").getTime(),
+  price: 0, // Free event
+  totalTickets: 100,
+  userId: user.id,
+});
+```
+
+### Creating a Paid Event
+
+```typescript
+const eventId = await createEvent({
+  name: "Tech Conference 2026",
+  description: "Annual technology and innovation conference",
+  location: "Convention Center, Hall A",
+  eventDate: new Date("2026-09-20T09:00:00").getTime(),
+  price: 199.99,
+  totalTickets: 1000,
+  userId: user.id,
+});
+```
+
+### With Form Validation
+
+```typescript
+import { z } from "zod";
+
+const formSchema = z.object({
+  name: z.string().min(1, "Event name is required"),
+  description: z.string().min(1, "Description is required"),
+  location: z.string().min(1, "Location is required"),
+  eventDate: z.date().min(
+    new Date(new Date().setHours(0, 0, 0, 0)),
+    "Event date must be in the future"
+  ),
+  price: z.number().min(0, "Price must be 0 or greater"),
+  totalTickets: z.number().min(1, "Must have at least 1 ticket"),
+});
+
+// Validate before creating
+const validated = formSchema.parse(formData);
+const eventId = await createEvent({
+  ...validated,
+  eventDate: validated.eventDate.getTime(),
+  userId: user.id,
+});
+```
+
+**Source**: `src/components/event-form.tsx:30-42`
+
+## Error Handling
+
+The mutation may fail for various reasons. Always implement proper error handling:
+
+```typescript
+try {
+  const eventId = await createEvent(eventData);
+  toast.success("Event created successfully!");
+  return eventId;
+} catch (error) {
+  console.error("Failed to create event:", error);
+  toast.error("Failed to create event. Please try again.");
+  throw error;
+}
+```
+
+## Related Endpoints
+
+- [events.updateEvent](/api/events/update) - Update an existing event
+- [events.cancelEvent](/api/events/cancel) - Cancel an event
+- [storage.updateEventImage](/api/storage) - Add an image to the event
+- [events.getById](/api/events) - Retrieve the created event details
+
+## Best Practices
+
+<Tip>
+  1. **Validate user input** on the client side before calling the mutation
+  2. **Use timestamps** for eventDate - convert Date objects with `.getTime()`
+  3. **Store the returned eventId** for subsequent operations
+  4. **Handle errors gracefully** with user-friendly messages
+  5. **Confirm user authentication** before allowing event creation
+</Tip>
+
+<Note>
+  After creating an event, it becomes immediately visible in event listings (via `events.get` and `events.search`) unless it's marked as cancelled.
+</Note>

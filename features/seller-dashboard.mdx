@@ -1,0 +1,507 @@
+---
+title: 'Seller Dashboard'
+description: 'Event performance tracking and analytics for organizers'
+icon: 'chart-line'
+---
+
+The seller dashboard provides event organizers with comprehensive insights into their events' performance, including ticket sales, revenue, refunds, and access to Stripe Connect for payout management.
+
+## Dashboard Metrics
+
+Event organizers can track key performance indicators for each event:
+
+<CardGroup cols={2}>
+  <Card title="Tickets Sold" icon="ticket">
+    Number of valid and used tickets
+  </Card>
+  <Card title="Revenue" icon="currency-pound">
+    Total earnings from ticket sales
+  </Card>
+  <Card title="Refunds" icon="arrow-rotate-left">
+    Number and amount of refunded tickets
+  </Card>
+  <Card title="Cancelled Tickets" icon="ban">
+    Tickets from cancelled events
+  </Card>
+</CardGroup>
+
+## Metrics Type Definition
+
+From `convex/events.ts:10-15`:
+
+```typescript
+export type Metrics = {
+  soldTickets: number;
+  refundedTickets: number;
+  cancelledTickets: number;
+  revenue: number;
+};
+```
+
+## Seller Events Query
+
+The main query that powers the seller dashboard retrieves all events created by a user along with their metrics.
+
+### Implementation
+
+From `convex/events.ts:389-429`:
+
+```typescript
+export const getSellerEvents = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const events = await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("userId"), userId))
+      .collect();
+
+    // For each event, get ticket sales data
+    const eventsWithMetrics = await Promise.all(
+      events.map(async (event) => {
+        const tickets = await ctx.db
+          .query("tickets")
+          .withIndex("by_event", (q) => q.eq("eventId", event._id))
+          .collect();
+
+        const validTickets = tickets.filter(
+          (t) => t.status === "valid" || t.status === "used"
+        );
+        const refundedTickets = tickets.filter((t) => t.status === "refunded");
+        const cancelledTickets = tickets.filter(
+          (t) => t.status === "cancelled"
+        );
+
+        const metrics: Metrics = {
+          soldTickets: validTickets.length,
+          refundedTickets: refundedTickets.length,
+          cancelledTickets: cancelledTickets.length,
+          revenue: validTickets.length * event.price,
+        };
+
+        return {
+          ...event,
+          metrics,
+        };
+      })
+    );
+
+    return eventsWithMetrics;
+  },
+});
+```
+
+<Note>
+Revenue is calculated as `soldTickets × event.price` and only includes valid and used tickets.
+</Note>
+
+## Seller Event Display
+
+<Tabs>
+  <Tab title="UI Components">
+    The seller dashboard displays events in two categories:
+
+    ### Upcoming Events
+    Events with `eventDate > Date.now()`
+
+    ### Past Events  
+    Events with `eventDate <= Date.now()`
+
+    From `src/components/seller-events-list.tsx:37-69`:
+
+    ```typescript
+    const upcomingEvents = events.filter((e) => e.eventDate > Date.now());
+    const pastEvents = events.filter((e) => e.eventDate <= Date.now());
+
+    return (
+      <div className="mx-auto space-y-8">
+        {/* Upcoming Events */}
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-4">
+            Upcoming Events
+          </h2>
+          <div className="grid grid-cols-1 gap-6">
+            {upcomingEvents.map((event) => (
+              <SellerEventCard key={event._id} event={event} />
+            ))}
+            {upcomingEvents.length === 0 && (
+              <p className="text-gray-500">No upcoming events</p>
+            )}
+          </div>
+        </div>
+
+        {/* Past Events */}
+        {pastEvents.length > 0 && (
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900 mb-4">Past Events</h2>
+            <div className="grid grid-cols-1 gap-6">
+              {pastEvents.map((event) => (
+                <SellerEventCard key={event._id} event={event} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+    ```
+  </Tab>
+
+  <Tab title="Event Card">
+    Each event card displays comprehensive metrics and management options.
+
+    From `src/components/seller-events-list.tsx:135-201`:
+
+    ```typescript
+    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="bg-gray-50 p-3 rounded-lg">
+        <div className="flex items-center gap-2 text-gray-600 mb-1">
+          <Ticket className="w-4 h-4" />
+          <span className="text-sm font-medium">
+            {event.is_cancelled ? "Tickets Refunded" : "Tickets Sold"}
+          </span>
+        </div>
+        <p className="text-2xl font-semibold text-gray-900">
+          {event.is_cancelled ? (
+            <>
+              {event.metrics.refundedTickets}
+              <span className="text-sm text-gray-500 font-normal">
+                {" "}
+                refunded
+              </span>
+            </>
+          ) : (
+            <>
+              {event.metrics.soldTickets}
+              <span className="text-sm text-gray-500 font-normal">
+                /{event.totalTickets}
+              </span>
+            </>
+          )}
+        </p>
+      </div>
+
+      <div className="bg-gray-50 p-3 rounded-lg">
+        <div className="flex items-center gap-2 text-gray-600 mb-1">
+          <Banknote className="w-4 h-4" />
+          <span className="text-sm font-medium">
+            {event.is_cancelled ? "Amount Refunded" : "Revenue"}
+          </span>
+        </div>
+        <p className="text-2xl font-semibold text-gray-900">
+          £
+          {event.is_cancelled
+            ? event.metrics.refundedTickets * event.price
+            : event.metrics.revenue}
+        </p>
+      </div>
+
+      <div className="bg-gray-50 p-3 rounded-lg">
+        <div className="flex items-center gap-2 text-gray-600 mb-1">
+          <CalendarDays className="w-4 h-4" />
+          <span className="text-sm font-medium">Date</span>
+        </div>
+        <p className="text-sm font-medium text-gray-900">
+          {new Date(event.eventDate).toLocaleDateString()}
+        </p>
+      </div>
+
+      <div className="bg-gray-50 p-3 rounded-lg">
+        <div className="flex items-center gap-2 text-gray-600 mb-1">
+          <InfoIcon className="w-4 h-4" />
+          <span className="text-sm font-medium">Status</span>
+        </div>
+        <p className="text-sm font-medium text-gray-900">
+          {event.is_cancelled
+            ? "Cancelled"
+            : isPastEvent
+              ? "Ended"
+              : "Active"}
+        </p>
+      </div>
+    </div>
+    ```
+  </Tab>
+</Tabs>
+
+## Event Management Actions
+
+For upcoming, non-cancelled events, organizers have access to:
+
+<AccordionGroup>
+  <Accordion title="Edit Event">
+    Modify event details while respecting ticket sale constraints.
+
+    ```typescript
+    <Link
+      href={`/seller/events/${event._id}/edit`}
+      className="shrink-0 flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+    >
+      <Edit className="w-4 h-4" />
+      Edit
+    </Link>
+    ```
+
+    See [Event Management - Updating Events](/features/event-management#updating-events) for details on update constraints.
+  </Accordion>
+
+  <Accordion title="Cancel Event">
+    Cancel the event and trigger automatic refunds for all ticket holders.
+
+    ```typescript
+    <CancelEventButton eventId={event._id} />
+    ```
+
+    See [Event Management - Cancelling Events](/features/event-management#cancelling-events) for the cancellation process.
+  </Accordion>
+</AccordionGroup>
+
+<Warning>
+Edit and cancel actions are only available for upcoming events that haven't been cancelled.
+</Warning>
+
+## Stripe Connect Integration
+
+Event organizers must connect a Stripe account to receive payouts from ticket sales.
+
+### Create Stripe Connect Account
+
+Ticket Hub uses Stripe Connect with the Express account type:
+
+```typescript
+const account = await stripe.accounts.create({
+  type: "express",
+  email: user.emailAddresses[0].emailAddress,
+  capabilities: {
+    card_payments: { requested: true },
+    transfers: { requested: true },
+  },
+});
+```
+
+### Access Stripe Dashboard
+
+Organizers can access their Stripe Express dashboard to:
+- View detailed transaction history
+- Manage payout schedules
+- Update banking information
+- View platform fees
+
+From `src/actions/create-stripe-connect-login-link.ts:5-17`:
+
+```typescript
+export async function createStripeConnectLoginLink(stripeAccountId: string) {
+  if (!stripeAccountId) {
+    throw new Error("No Stripe account ID provided");
+  }
+
+  try {
+    const loginLink = await stripe.accounts.createLoginLink(stripeAccountId);
+    return loginLink.url;
+  } catch (error) {
+    console.error("Error creating Stripe Connect login link:", error);
+    throw new Error("Failed to create Stripe Connect login link");
+  }
+}
+```
+
+<Info>
+The login link is temporary and expires after a short period for security.
+</Info>
+
+## Revenue Calculation
+
+### Platform Fee
+
+Ticket Hub charges a **1% platform fee** on each ticket sale:
+
+```typescript
+payment_intent_data: {
+  application_fee_amount: Math.round(event.price * 100 * 0.01),
+}
+```
+
+### Net Revenue
+
+Organizers receive:
+- **99%** of the ticket price
+- Minus Stripe processing fees (typically 2.9% + £0.30)
+
+### Example Calculation
+
+For a £50 ticket:
+- Gross price: £50.00
+- Platform fee (1%): £0.50
+- To organizer: £49.50
+- Stripe fees: ~£1.48
+- Net to organizer: ~£48.02
+
+<Note>
+Stripe processing fees are deducted automatically before payout.
+</Note>
+
+## Event Performance Tracking
+
+### Metrics Breakdown
+
+<Steps>
+  <Step title="Sold Tickets">
+    Count of tickets with status `valid` or `used`:
+    ```typescript
+    const validTickets = tickets.filter(
+      (t) => t.status === "valid" || t.status === "used"
+    );
+    const soldTickets = validTickets.length;
+    ```
+  </Step>
+
+  <Step title="Revenue">
+    Total earnings from sold tickets:
+    ```typescript
+    const revenue = validTickets.length * event.price;
+    ```
+  </Step>
+
+  <Step title="Refunded Tickets">
+    Tickets that were refunded:
+    ```typescript
+    const refundedTickets = tickets.filter((t) => t.status === "refunded");
+    ```
+  </Step>
+
+  <Step title="Cancelled Tickets">
+    Tickets from cancelled events:
+    ```typescript
+    const cancelledTickets = tickets.filter(
+      (t) => t.status === "cancelled"
+    );
+    ```
+  </Step>
+</Steps>
+
+## Event Status Indicators
+
+Events display different status indicators based on their state:
+
+<Tabs>
+  <Tab title="Active">
+    Upcoming events that are currently on sale and accepting ticket purchases.
+    
+    - Event date is in the future
+    - `is_cancelled` is not set
+    - Displayed with standard styling
+  </Tab>
+
+  <Tab title="Ended">
+    Past events that have completed.
+    
+    - Event date is in the past
+    - Cannot be edited
+    - Metrics show final performance
+  </Tab>
+
+  <Tab title="Cancelled">
+    Events that were cancelled by the organizer.
+    
+    ```typescript
+    {event.is_cancelled && (
+      <div className="mt-2 flex items-center gap-2 text-red-600">
+        <Ban className="w-4 h-4" />
+        <span className="text-sm font-medium">
+          Event Cancelled & Refunded
+        </span>
+      </div>
+    )}
+    ```
+    
+    - Displayed with red border and indicators
+    - Shows refunded ticket count
+    - Cannot be edited or reactivated
+  </Tab>
+</Tabs>
+
+## Dashboard Queries
+
+### Get Event Availability
+
+Check real-time ticket availability for an event:
+
+From `convex/events.ts:324-368`:
+
+```typescript
+export const getEventAvailability = query({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error("Event not found");
+
+    // Count total purchased tickets
+    const purchasedCount = await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .collect()
+      .then(
+        (tickets) =>
+          tickets.filter(
+            (t) =>
+              t.status === TICKET_STATUS.VALID ||
+              t.status === TICKET_STATUS.USED
+          ).length
+      );
+
+    // Count current valid offers
+    const now = Date.now();
+    const activeOffers = await ctx.db
+      .query("waitingList")
+      .withIndex("by_event_status", (q) =>
+        q
+          .eq("eventId", eventId)
+          .eq("status", WAITING_LIST_STATUS.OFFERED ?? "offered")
+      )
+      .collect()
+      .then(
+        (entries) => entries.filter((e) => (e.offerExpiresAt ?? 0) > now).length
+      );
+
+    const totalReserved = purchasedCount + activeOffers;
+
+    return {
+      isSoldOut: totalReserved >= event.totalTickets,
+      totalTickets: event.totalTickets,
+      purchasedCount,
+      activeOffers,
+      remainingTickets: Math.max(0, event.totalTickets - totalReserved),
+    };
+  },
+});
+```
+
+### Get Valid Tickets for Event
+
+Retrieve all valid tickets for an event (used for scanning/verification):
+
+From `convex/tickets.ts:37-48`:
+
+```typescript
+export const getValidTicketsForEvent = query({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }) => {
+    return await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "valid"), q.eq(q.field("status"), "used"))
+      )
+      .collect();
+  },
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Event Management" icon="calendar" href="/features/event-management">
+    Create and manage events
+  </Card>
+  <Card title="Ticket Purchasing" icon="credit-card" href="/features/ticket-purchasing">
+    Understand the buyer experience
+  </Card>
+</CardGroup>

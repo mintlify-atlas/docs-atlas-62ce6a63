@@ -1,0 +1,158 @@
+---
+title: "Stripe Checkout Session"
+description: "Create a Stripe Checkout session for event ticket purchases"
+---
+
+## createStripeCheckoutSession
+
+Creates a Stripe Checkout session for purchasing event tickets. This action handles the creation of a payment session with Stripe Connect, applying a 1% application fee and setting up proper expiration times.
+
+### Authentication
+
+This action requires authentication via Clerk. The user must be authenticated before calling this function.
+
+```typescript
+import { auth } from "@clerk/nextjs/server";
+
+const { userId } = await auth();
+if (!userId) throw new Error("Not authenticated");
+```
+
+### Function Signature
+
+```typescript
+export async function createStripeCheckoutSession({
+  eventId,
+}: {
+  eventId: Id<"events">;
+}): Promise<{ sessionId: string; sessionUrl: string | null }>
+```
+
+### Parameters
+
+<ParamField path="eventId" type="Id<'events'>" required>
+  The unique identifier of the event for which to create a checkout session
+</ParamField>
+
+### Return Value
+
+<ResponseField name="sessionId" type="string">
+  The Stripe Checkout session ID
+</ResponseField>
+
+<ResponseField name="sessionUrl" type="string | null">
+  The URL to redirect the user to for completing the checkout
+</ResponseField>
+
+### Metadata Structure
+
+The checkout session includes metadata for tracking and webhook processing:
+
+```typescript
+export type StripeCheckoutMetaData = {
+  eventId: Id<"events">;      // The event being purchased
+  userId: string;              // The Clerk user ID of the purchaser
+  waitingListId: Id<"waitingList">; // The waiting list entry ID
+};
+```
+
+### Application Fee
+
+The action automatically calculates and applies a **1% application fee** on top of the ticket price:
+
+```typescript
+payment_intent_data: {
+  application_fee_amount: Math.round(event.price * 100 * 0.01),
+}
+```
+
+### Session Expiration
+
+The checkout session expires after 30 minutes (the minimum allowed by Stripe). This matches the ticket offer expiration time defined in `DURATIONS.TICKET_OFFER`:
+
+```typescript
+expires_at: Math.floor(Date.now() / 1000) + DURATIONS.TICKET_OFFER / 1000
+```
+
+### Workflow
+
+1. **Authentication Check**: Verifies the user is authenticated via Clerk
+2. **Event Validation**: Fetches event details from Convex database
+3. **Queue Position Check**: Verifies user has a valid "offered" status in the waiting list
+4. **Stripe Connect ID**: Retrieves the event owner's Stripe Connect account ID
+5. **Offer Expiration**: Validates the ticket offer has an expiration date
+6. **Session Creation**: Creates a Stripe Checkout session with:
+   - Payment method: Card only
+   - Currency: GBP
+   - Line items with event details and pricing
+   - 1% application fee
+   - 30-minute expiration
+   - Success and cancel URLs
+   - Metadata for tracking
+
+### Stripe API Usage
+
+This action uses the Stripe Checkout Sessions API with Stripe Connect:
+
+```typescript
+const session = await stripe.checkout.sessions.create(
+  {
+    payment_method_types: ["card"],
+    line_items: [{
+      price_data: {
+        currency: "gbp",
+        product_data: {
+          name: event.name,
+          description: event.description,
+        },
+        unit_amount: Math.round(event.price * 100),
+      },
+      quantity: 1,
+    }],
+    payment_intent_data: {
+      application_fee_amount: Math.round(event.price * 100 * 0.01),
+    },
+    expires_at: Math.floor(Date.now() / 1000) + DURATIONS.TICKET_OFFER / 1000,
+    mode: "payment",
+    success_url: `${baseUrl}/tickets/purchase-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${baseUrl}/event/${eventId}`,
+    metadata,
+  },
+  {
+    stripeAccount: stripeConnectId, // Connect account context
+  }
+);
+```
+
+### Error Handling
+
+The action throws errors for the following conditions:
+
+- User not authenticated
+- Event not found
+- No valid ticket offer found (must have "offered" status)
+- Stripe Connect ID not found for event owner
+- Ticket offer has no expiration date
+- Stripe API errors
+
+### Example Usage
+
+```typescript
+try {
+  const { sessionId, sessionUrl } = await createStripeCheckoutSession({
+    eventId: "kg7x8y9z0a1b2c3d4e5f6g7h" as Id<"events">,
+  });
+  
+  if (sessionUrl) {
+    // Redirect user to Stripe Checkout
+    window.location.href = sessionUrl;
+  }
+} catch (error) {
+  console.error("Failed to create checkout session:", error);
+}
+```
+
+### Related Actions
+
+- [Stripe Connect Actions](/api/actions/stripe-connect) - Managing Stripe Connect accounts
+- [Refunds](/api/actions/refunds) - Processing ticket refunds

@@ -1,0 +1,262 @@
+---
+title: 'joinWaitingList'
+description: 'Add a user to the event waiting list'
+---
+
+## Mutation
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useMutation } from "convex/react";
+
+const joinWaitingList = useMutation(api.events.joinWaitingList);
+```
+
+**Location**: `convex/events.ts:111-189`
+
+## Description
+
+Adds a user to an event's waiting list. If tickets are immediately available, the user receives an instant offer with a 30-minute expiration. Otherwise, they are placed in the queue and will receive an offer when a ticket becomes available.
+
+This mutation includes rate limiting to prevent abuse and automatic offer management.
+
+## Rate Limiting
+
+<Info>
+  **Rate Limit**: 3 joins per 30 minutes per user
+  
+  The rate limit is applied per `userId` across all events using a fixed window algorithm.
+</Info>
+
+**Configuration** (`convex/events.ts:18-24`):
+```typescript
+const rateLimiter = new RateLimiter(components.rateLimiter, {
+  queueJoin: {
+    kind: "fixed window",
+    rate: 3,              // 3 joins allowed
+    period: 30 * MINUTE,  // in 30 minutes
+  },
+});
+```
+
+When rate limit is exceeded, an error is thrown with the retry-after time:
+```
+You've joined the waiting list too many times. Please wait X minutes before trying again.
+```
+
+## Parameters
+
+<ParamField body="eventId" type="Id<'events'>" required>
+  The ID of the event to join the waiting list for
+</ParamField>
+
+<ParamField body="userId" type="string" required>
+  The unique identifier of the user joining the waiting list
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Whether the operation completed successfully
+</ResponseField>
+
+<ResponseField name="status" type="enum" required>
+  The resulting status of the waiting list entry
+  
+  - `offered` - Tickets were available, user has an active offer
+  - `waiting` - No tickets available, user is in queue
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable message describing the result
+  
+  - Offered: `"Ticket offer created - you have 30 minutes to purchase"`
+  - Waiting: `"Added to waiting list - you'll be notified when a ticket becomes available"`
+</ResponseField>
+
+## Behavior
+
+### Immediate Offer (Tickets Available)
+
+When tickets are available:
+
+1. Creates waiting list entry with `status: "offered"`
+2. Sets `offerExpiresAt` to current time + 30 minutes
+3. Schedules automatic expiration job
+4. Returns success with `status: "offered"`
+
+**Code** (`convex/events.ts:149-166`):
+```typescript
+if (available) {
+  const waitingListId = await ctx.db.insert("waitingList", {
+    eventId,
+    userId,
+    status: WAITING_LIST_STATUS.OFFERED,
+    offerExpiresAt: now + DURATIONS.TICKET_OFFER, // 30 minutes
+  });
+
+  await ctx.scheduler.runAfter(
+    DURATIONS.TICKET_OFFER,
+    internal.waiting_list.expireOffer,
+    { waitingListId, eventId }
+  );
+}
+```
+
+### Queue Placement (No Tickets)
+
+When no tickets are available:
+
+1. Creates waiting list entry with `status: "waiting"`
+2. User will receive offer when queue is processed
+3. Returns success with `status: "waiting"`
+
+**Code** (`convex/events.ts:167-174`):
+```typescript
+else {
+  await ctx.db.insert("waitingList", {
+    eventId,
+    userId,
+    status: WAITING_LIST_STATUS.WAITING,
+  });
+}
+```
+
+## Validations
+
+### Rate Limit Check
+
+Verifies the user hasn't exceeded 3 joins in 30 minutes:
+
+```typescript
+const status = await rateLimiter.limit(ctx, "queueJoin", { key: userId });
+if (!status.ok) {
+  throw new ConvexError(
+    `You've joined the waiting list too many times. Please wait ${Math.ceil(
+      status.retryAfter / (60 * 1000)
+    )} minutes before trying again.`
+  );
+}
+```
+
+### Duplicate Entry Check
+
+Prevents users from joining the same event multiple times:
+
+```typescript
+const existingEntry = await ctx.db
+  .query("waitingList")
+  .withIndex("by_user_event", (q) =>
+    q.eq("userId", userId).eq("eventId", eventId)
+  )
+  .filter((q) => q.neq(q.field("status"), WAITING_LIST_STATUS.EXPIRED))
+  .first();
+
+if (existingEntry) {
+  throw new Error("Already in waiting list for this event");
+}
+```
+
+### Event Existence Check
+
+Ensures the event exists:
+
+```typescript
+const event = await ctx.db.get(eventId);
+if (!event) throw new Error("Event not found");
+```
+
+## Examples
+
+### Join Waiting List (React)
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useMutation } from "convex/react";
+import { Id } from "@/convex/_generated/dataModel";
+
+function JoinWaitingListButton({ eventId }: { eventId: Id<"events"> }) {
+  const joinWaitingList = useMutation(api.events.joinWaitingList);
+  const [loading, setLoading] = useState(false);
+
+  const handleJoin = async () => {
+    setLoading(true);
+    try {
+      const result = await joinWaitingList({
+        eventId,
+        userId: "user_123",
+      });
+
+      if (result.status === "offered") {
+        alert("You have 30 minutes to purchase your ticket!");
+        // Redirect to checkout
+      } else {
+        alert("You're in the queue! We'll notify you when a ticket is available.");
+      }
+    } catch (error) {
+      if (error.message.includes("too many times")) {
+        alert("Rate limit exceeded. Please try again later.");
+      } else {
+        alert(error.message);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <button onClick={handleJoin} disabled={loading}>
+      {loading ? "Joining..." : "Join Waiting List"}
+    </button>
+  );
+}
+```
+
+### Response Examples
+
+**Immediate Offer**:
+```json
+{
+  "success": true,
+  "status": "offered",
+  "message": "Ticket offer created - you have 30 minutes to purchase"
+}
+```
+
+**Queue Placement**:
+```json
+{
+  "success": true,
+  "status": "waiting",
+  "message": "Added to waiting list - you'll be notified when a ticket becomes available"
+}
+```
+
+### Error Responses
+
+**Rate Limit Exceeded**:
+```json
+{
+  "error": "You've joined the waiting list too many times. Please wait 15 minutes before trying again."
+}
+```
+
+**Already in Waiting List**:
+```json
+{
+  "error": "Already in waiting list for this event"
+}
+```
+
+**Event Not Found**:
+```json
+{
+  "error": "Event not found"
+}
+```
+
+## Related Endpoints
+
+- [getQueuePosition](/api/waiting-list/get-position) - Check current queue position
+- [processQueue](/api/waiting-list/process-queue) - Process waiting list queue
+- [checkAvailability](/api/events/check-availability) - Check ticket availability

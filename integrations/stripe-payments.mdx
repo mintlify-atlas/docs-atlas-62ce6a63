@@ -1,0 +1,319 @@
+---
+title: Stripe Connect Integration
+description: Accept payments with Stripe Connect for marketplace functionality
+icon: credit-card
+---
+
+Ticket Hub uses Stripe Connect to enable event organizers to receive payments directly while the platform takes a 1% application fee.
+
+## Prerequisites
+
+- Stripe account
+- Stripe Connect configured for your platform
+- Webhook endpoint accessible from the internet
+
+## Environment Variables
+
+<CodeGroup>
+
+```bash Server
+STRIPE_SECRET_KEY=sk_live_...
+STRIPE_WEBHOOK_SECRET=whsec_...
+```
+
+```bash Client
+NEXT_PUBLIC_APP_URL=https://your-domain.com
+```
+
+</CodeGroup>
+
+## Stripe Client Setup
+
+Create a Stripe client instance in your application:
+
+```typescript src/lib/stripe.ts
+import Stripe from 'stripe';
+import env from '@/env';
+
+export const stripe = new Stripe(env.STRIPE_SECRET_KEY, {
+  apiVersion: '2024-11-20.acacia',
+});
+```
+
+## Creating Checkout Sessions
+
+When a user is offered a ticket, create a Stripe Checkout session connected to the event organizer's account:
+
+```typescript src/actions/create-stripe-checkout-session.ts
+import { stripe } from '@/lib/stripe';
+import { DURATIONS } from '../../convex/constant';
+
+export async function createStripeCheckoutSession({
+  eventId,
+}: {
+  eventId: Id<"events">;
+}) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Not authenticated");
+
+  const convex = getConvexClient();
+  
+  // Get event details
+  const event = await convex.query(api.events.getById, { eventId });
+  if (!event) throw new Error("Event not found");
+
+  // Get event organizer's Stripe Connect ID
+  const stripeConnectId = await convex.query(
+    api.users.getUsersStripeConnectId,
+    { userId: event.userId }
+  );
+
+  if (!stripeConnectId) {
+    throw new Error("Stripe Connect ID not found for owner of the event!");
+  }
+
+  // Get waiting list entry
+  const queuePosition = await convex.query(api.waiting_list.getQueuePosition, {
+    eventId,
+    userId,
+  });
+
+  if (!queuePosition || queuePosition.status !== "offered") {
+    throw new Error("No valid ticket offer found");
+  }
+
+  const metadata = {
+    eventId,
+    userId,
+    waitingListId: queuePosition._id,
+  };
+
+  // Create Stripe Checkout Session
+  const session = await stripe.checkout.sessions.create(
+    {
+      payment_method_types: ["card"],
+      line_items: [
+        {
+          price_data: {
+            currency: "gbp",
+            product_data: {
+              name: event.name,
+              description: event.description,
+            },
+            unit_amount: Math.round(event.price * 100),
+          },
+          quantity: 1,
+        },
+      ],
+      payment_intent_data: {
+        // 1% platform fee
+        application_fee_amount: Math.round(event.price * 100 * 0.01),
+      },
+      // 30 minutes to complete checkout
+      expires_at: Math.floor(Date.now() / 1000) + DURATIONS.TICKET_OFFER / 1000,
+      mode: "payment",
+      success_url: `${baseUrl}/tickets/purchase-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/event/${eventId}`,
+      metadata,
+    },
+    {
+      // Connect to event organizer's account
+      stripeAccount: stripeConnectId,
+    }
+  );
+
+  return { sessionId: session.id, sessionUrl: session.url };
+}
+```
+
+<Note>
+The `DURATIONS.TICKET_OFFER` is set to 30 minutes (1800000ms), which is the minimum allowed by Stripe for checkout session expiration.
+</Note>
+
+## Application Fee
+
+The platform takes a **1% fee** on each transaction:
+
+```typescript
+payment_intent_data: {
+  application_fee_amount: Math.round(event.price * 100 * 0.01),
+}
+```
+
+The event organizer receives 99% of the ticket price directly to their connected Stripe account.
+
+## Webhook Handling
+
+Set up a webhook endpoint to handle successful payments:
+
+```typescript src/app/api/webhooks/stripe/route.ts
+import { stripe } from '@/lib/stripe';
+import { getConvexClient } from '@/lib/convex';
+import { api } from '../../../../../convex/_generated/api';
+import env from '@/env';
+
+export async function POST(req: Request) {
+  const body = await req.text();
+  const headersList = await headers();
+  const signature = headersList.get("stripe-signature") as string;
+
+  let event: Stripe.Event;
+
+  try {
+    event = stripe.webhooks.constructEvent(
+      body,
+      signature,
+      env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err) {
+    console.error("Webhook construction failed:", err);
+    return new Response(`Webhook Error: ${(err as Error).message}`, {
+      status: 400,
+    });
+  }
+
+  const convex = getConvexClient();
+
+  if (event.type === "checkout.session.completed") {
+    const session = event.data.object as Stripe.Checkout.Session;
+    const metadata = session.metadata as StripeCheckoutMetaData;
+
+    try {
+      await convex.mutation(api.events.purchaseTicket, {
+        eventId: metadata.eventId,
+        userId: metadata.userId,
+        waitingListId: metadata.waitingListId,
+        paymentInfo: {
+          paymentIntentId: session.payment_intent as string,
+          amount: session.amount_total ?? 0,
+        },
+      });
+    } catch (error) {
+      console.error("Error processing webhook:", error);
+      return new Response("Error processing webhook", { status: 500 });
+    }
+  }
+
+  return new Response(null, { status: 200 });
+}
+```
+
+## Refund Processing
+
+When an event is cancelled, automatically refund all ticket purchases:
+
+```typescript src/actions/refund-event-ticket.ts
+import { stripe } from '@/lib/stripe';
+import { getConvexClient } from '@/lib/convex';
+import { api } from '../../convex/_generated/api';
+
+export async function refundEventTickets(eventId: Id<"events">) {
+  const convex = getConvexClient();
+
+  const event = await convex.query(api.events.getById, { eventId });
+  if (!event) throw new Error("Event not found");
+
+  // Get event owner's Stripe Connect ID
+  const stripeConnectId = await convex.query(
+    api.users.getUsersStripeConnectId,
+    { userId: event.userId }
+  );
+
+  if (!stripeConnectId) {
+    throw new Error("Stripe Connect ID not found");
+  }
+
+  // Get all valid tickets for this event
+  const tickets = await convex.query(api.tickets.getValidTicketsForEvent, {
+    eventId,
+  });
+
+  // Process refunds for each ticket
+  const results = await Promise.allSettled(
+    tickets.map(async (ticket) => {
+      if (!ticket.paymentIntentId) {
+        throw new Error("Payment information not found");
+      }
+
+      // Issue refund through Stripe
+      await stripe.refunds.create(
+        {
+          payment_intent: ticket.paymentIntentId,
+          reason: "requested_by_customer",
+        },
+        {
+          stripeAccount: stripeConnectId,
+        }
+      );
+
+      // Update ticket status to refunded
+      await convex.mutation(api.tickets.updateTicketStatus, {
+        ticketId: ticket._id,
+        status: "refunded",
+      });
+
+      return { success: true, ticketId: ticket._id };
+    })
+  );
+
+  // Check if all refunds were successful
+  const allSuccessful = results.every(
+    (result) => result.status === "fulfilled" && result.value.success
+  );
+
+  if (!allSuccessful) {
+    throw new Error(
+      "Some refunds failed. Please check the logs and try again."
+    );
+  }
+
+  // Cancel the event
+  await convex.mutation(api.events.cancelEvent, { eventId });
+
+  return { success: true };
+}
+```
+
+<Warning>
+Refunds are processed through the event organizer's connected Stripe account. Ensure they have sufficient balance or Stripe will automatically debit from their bank account.
+</Warning>
+
+## Webhook Configuration
+
+1. Go to your Stripe Dashboard
+2. Navigate to **Developers** > **Webhooks**
+3. Click **Add endpoint**
+4. Enter your webhook URL: `https://your-domain.com/api/webhooks/stripe`
+5. Select events to listen to:
+   - `checkout.session.completed`
+6. Copy the webhook signing secret to your `.env` file
+
+## Testing
+
+Use Stripe CLI to test webhooks locally:
+
+```bash
+stripe listen --forward-to localhost:3000/api/webhooks/stripe
+```
+
+Use test card numbers:
+
+<CardGroup cols={2}>
+  <Card title="Successful Payment" icon="check">
+    4242 4242 4242 4242
+  </Card>
+  <Card title="Requires Authentication" icon="shield">
+    4000 0025 0000 3155
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Clerk Auth" icon="user" href="/integrations/clerk-auth">
+    Set up user authentication
+  </Card>
+  <Card title="Convex Database" icon="database" href="/integrations/convex-database">
+    Configure your database
+  </Card>
+</CardGroup>

@@ -1,0 +1,193 @@
+---
+title: 'Get User Tickets'
+description: 'Retrieve all tickets for a user with event details'
+---
+
+## Endpoint
+
+```typescript
+events.getUserTickets
+```
+
+## Description
+
+Retrieves all tickets belonging to a specific user, enriched with complete event information. This query is useful for displaying a user's ticket collection, ticket history, or event dashboard.
+
+**Source:** `convex/events.ts:279-299`
+
+## Parameters
+
+<ParamField path="userId" type="string" required>
+  The unique identifier of the user whose tickets to retrieve
+</ParamField>
+
+## Response
+
+<ResponseField name="tickets" type="array">
+  Array of ticket objects with embedded event details
+  
+  <ResponseField name="_id" type="Id<'tickets'>">
+    Unique ticket identifier
+  </ResponseField>
+  
+  <ResponseField name="eventId" type="Id<'events'>">
+    Reference to the event this ticket is for
+  </ResponseField>
+  
+  <ResponseField name="userId" type="string">
+    User who owns this ticket
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Current ticket status: `valid`, `used`, `refunded`, or `cancelled`
+  </ResponseField>
+  
+  <ResponseField name="purchasedAt" type="number">
+    Unix timestamp (milliseconds) when the ticket was purchased
+  </ResponseField>
+  
+  <ResponseField name="paymentIntentId" type="string">
+    Stripe payment intent ID for this purchase
+  </ResponseField>
+  
+  <ResponseField name="amount" type="number">
+    Amount paid for the ticket in cents
+  </ResponseField>
+  
+  <ResponseField name="event" type="object | null">
+    Complete event information (null if event was deleted)
+    
+    <ResponseField name="event._id" type="Id<'events'>">
+      Event identifier
+    </ResponseField>
+    
+    <ResponseField name="event.name" type="string">
+      Event name
+    </ResponseField>
+    
+    <ResponseField name="event.description" type="string">
+      Event description
+    </ResponseField>
+    
+    <ResponseField name="event.location" type="string">
+      Event location
+    </ResponseField>
+    
+    <ResponseField name="event.eventDate" type="number">
+      Event date as Unix timestamp (milliseconds)
+    </ResponseField>
+    
+    <ResponseField name="event.price" type="number">
+      Ticket price in cents
+    </ResponseField>
+    
+    <ResponseField name="event.totalTickets" type="number">
+      Total tickets available for this event
+    </ResponseField>
+    
+    <ResponseField name="event.userId" type="string">
+      Event organizer's user ID
+    </ResponseField>
+    
+    <ResponseField name="event.is_cancelled" type="boolean | undefined">
+      Whether the event has been cancelled
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+## Example
+
+```typescript
+import { useQuery } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+function UserTickets({ userId }: { userId: string }) {
+  const tickets = useQuery(api.events.getUserTickets, { userId });
+  
+  if (!tickets) return <div>Loading...</div>;
+  
+  return (
+    <div>
+      <h2>My Tickets</h2>
+      {tickets.length === 0 ? (
+        <p>No tickets yet</p>
+      ) : (
+        <ul>
+          {tickets.map((ticket) => (
+            <li key={ticket._id}>
+              <h3>{ticket.event?.name || "Event Deleted"}</h3>
+              <p>Status: {ticket.status}</p>
+              <p>Amount: ${(ticket.amount / 100).toFixed(2)}</p>
+              <p>
+                Purchased: {new Date(ticket.purchasedAt).toLocaleDateString()}
+              </p>
+              {ticket.event && (
+                <div>
+                  <p>Location: {ticket.event.location}</p>
+                  <p>
+                    Event Date:{" "}
+                    {new Date(ticket.event.eventDate).toLocaleDateString()}
+                  </p>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+```
+
+## Response Example
+
+```json
+[
+  {
+    "_id": "jx7abc123def",
+    "eventId": "jd7xyz789ghi",
+    "userId": "user_abc123",
+    "status": "valid",
+    "purchasedAt": 1678901234000,
+    "paymentIntentId": "pi_3MtwBwLkdIwHu7ix0NJLlkJq",
+    "amount": 5000,
+    "event": {
+      "_id": "jd7xyz789ghi",
+      "name": "Tech Conference 2026",
+      "description": "Annual technology conference",
+      "location": "San Francisco, CA",
+      "eventDate": 1679500800000,
+      "price": 5000,
+      "totalTickets": 100,
+      "userId": "organizer_xyz789"
+    }
+  },
+  {
+    "_id": "jx7def456ghi",
+    "eventId": "jd7uvw456jkl",
+    "userId": "user_abc123",
+    "status": "used",
+    "purchasedAt": 1676309234000,
+    "paymentIntentId": "pi_3LpqRsLkdIwHu7ix1ABCdefG",
+    "amount": 2500,
+    "event": {
+      "_id": "jd7uvw456jkl",
+      "name": "Local Meetup",
+      "description": "Community networking event",
+      "location": "New York, NY",
+      "eventDate": 1676400000000,
+      "price": 2500,
+      "totalTickets": 50,
+      "userId": "organizer_xyz789"
+    }
+  }
+]
+```
+
+## Use Cases
+
+- Display user's ticket dashboard
+- Show purchase history
+- List upcoming events user has tickets for
+- Filter tickets by status (valid, used, refunded)
+- Generate QR codes for valid tickets

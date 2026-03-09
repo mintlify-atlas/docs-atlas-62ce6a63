@@ -1,0 +1,133 @@
+---
+title: "Get User by ID"
+description: "Retrieve user information by Clerk user ID"
+---
+
+## Query: getUserById
+
+Retrieve a user's complete profile information using their Clerk user ID.
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useQuery } from "convex/react";
+
+const user = useQuery(api.users.getUserById, { 
+  userId: "user_2abc123def456" 
+});
+```
+
+## Parameters
+
+<ParamField path="userId" type="string" required>
+  The Clerk user ID to look up. This is the unique identifier assigned by Clerk during authentication.
+  
+  Example: `"user_2abc123def456"`
+</ParamField>
+
+## Response
+
+Returns the user object if found, or `null` if no user exists with the given ID.
+
+<ResponseField name="_id" type="Id<'users'>">
+  Convex-generated unique identifier for the user
+</ResponseField>
+
+<ResponseField name="userId" type="string">
+  Clerk user ID matching the query parameter
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Full name of the user
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  Primary email address
+</ResponseField>
+
+<ResponseField name="phone" type="string">
+  Phone number (if provided during registration)
+</ResponseField>
+
+<ResponseField name="stripeConnectId" type="string">
+  Stripe Connect account ID (if the user has connected their Stripe account)
+</ResponseField>
+
+## Example Response
+
+```json
+{
+  "_id": "jd7x8y9z0a1b2c3d4e5f6g7h",
+  "userId": "user_2abc123def456",
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "phone": "+1234567890",
+  "stripeConnectId": "acct_1MZy3x2Abc123Def"
+}
+```
+
+## Use Cases
+
+### Display User Profile
+
+```typescript
+function UserProfile({ userId }: { userId: string }) {
+  const user = useQuery(api.users.getUserById, { userId });
+  
+  if (!user) return <div>User not found</div>;
+  
+  return (
+    <div>
+      <h2>{user.name}</h2>
+      <p>Email: {user.email}</p>
+      {user.phone && <p>Phone: {user.phone}</p>}
+    </div>
+  );
+}
+```
+
+### Check Event Organizer Status
+
+```typescript
+function EventCreationPage({ userId }: { userId: string }) {
+  const user = useQuery(api.users.getUserById, { userId });
+  
+  const canCreatePaidEvents = user?.stripeConnectId != null;
+  
+  return (
+    <div>
+      {canCreatePaidEvents ? (
+        <CreateEventForm />
+      ) : (
+        <StripeConnectOnboarding />
+      )}
+    </div>
+  );
+}
+```
+
+## Implementation Details
+
+The query uses the `by_user_id` index for efficient lookups:
+
+```typescript
+const user = await ctx.db
+  .query("users")
+  .withIndex("by_user_id", (q) => q.eq("userId", userId))
+  .first();
+```
+
+## Error Handling
+
+- Returns `null` if no user is found with the given `userId`
+- Returns `undefined` while the query is loading (in React components)
+
+## Related Queries
+
+- [Get Stripe Connect ID](/api/users/stripe-connect) - Retrieve only the Stripe Connect ID
+- [Get All Users](/api/users/overview) - Retrieve all users (admin use)
+
+## Notes
+
+- Users are automatically created via Clerk webhooks
+- The `userId` field corresponds to Clerk's user ID format
+- This query is permission-less; implement access control in your application layer

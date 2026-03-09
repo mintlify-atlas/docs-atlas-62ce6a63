@@ -1,0 +1,348 @@
+---
+title: Buying Tickets
+description: Complete guide to discovering events, joining waiting lists, and purchasing tickets
+---
+
+Learn how to find events, secure your spot, and complete your ticket purchase on Ticket Hub.
+
+## How Ticket Hub Works
+
+Ticket Hub uses a **fair queue system** to prevent ticket scalping and ensure everyone has an equal opportunity:
+
+1. All buyers join a waiting list
+2. Tickets are offered in order (first come, first served)
+3. You have 30 minutes to complete your purchase
+4. Unclaimed tickets go to the next person in line
+
+<Tip>
+  This system ensures real fans get tickets, not bots or scalpers!
+</Tip>
+
+## Discovering Events
+
+<Steps>
+  <Step title="Browse Event Listings">
+    Navigate to the home page to see all available events:
+
+    - Events are displayed with images, names, and key details
+    - See pricing, date, and location at a glance
+    - Filter through active (non-cancelled) events only
+  </Step>
+
+  <Step title="Search for Events">
+    Use the search functionality to find specific events:
+
+    **Search includes:**
+    - Event names
+    - Descriptions
+    - Locations
+
+    **Example searches:**
+    - "music festival"
+    - "London"
+    - "tech conference"
+  </Step>
+
+  <Step title="View Event Details">
+    Click on an event to see complete information:
+
+    - Full description
+    - Venue location
+    - Event date and time
+    - Ticket price
+    - Availability status
+    - Waiting list size (if applicable)
+  </Step>
+</Steps>
+
+## Joining the Waiting List
+
+<Steps>
+  <Step title="Check Availability">
+    On the event page, you'll see one of these statuses:
+
+    ### Tickets Available
+    You can join immediately and receive an instant offer.
+
+    ### Sold Out - Join Waiting List
+    No tickets currently available, but you can queue up.
+
+    The system calculates availability based on:
+    - Total tickets
+    - Purchased tickets (valid + used)
+    - Active offers (not yet expired)
+  </Step>
+
+  <Step title="Join the Queue">
+    Click **Join Waiting List** or similar button:
+
+    <Note>
+      **Rate Limiting:** You can join up to 3 waiting lists within 30 minutes. This prevents spam and ensures fair access.
+    </Note>
+
+    **After joining:**
+    - If tickets are available: You receive an immediate offer
+    - If sold out: You're added to the queue in waiting status
+
+    <Warning>
+      You cannot join the waiting list twice for the same event. Each user gets one spot per event.
+    </Warning>
+  </Step>
+
+  <Step title="Track Your Position">
+    Once in the queue, you can see:
+
+    - Your position in line
+    - Current status (waiting, offered, purchased, expired)
+    - Offer expiration time (if offered)
+
+    **Status Meanings:**
+    - `waiting`: You're in line, waiting for a ticket
+    - `offered`: You have an active ticket offer
+    - `purchased`: You've successfully bought your ticket
+    - `expired`: Your offer expired without purchase
+  </Step>
+</Steps>
+
+## Receiving a Ticket Offer
+
+When a ticket becomes available, you'll receive an offer:
+
+<Steps>
+  <Step title="Offer Notification">
+    You'll be notified that you have an active ticket offer:
+
+    - Offer is valid for **30 minutes**
+    - Countdown timer displays time remaining
+    - You must purchase before expiration
+
+    <Info>
+      The 30-minute window gives you time to complete payment without rushing, while ensuring tickets don't sit unclaimed.
+    </Info>
+  </Step>
+
+  <Step title="Review Offer Details">
+    Before purchasing, verify:
+
+    - Event name and date
+    - Ticket price (in GBP)
+    - Platform fee (1% of ticket price)
+    - Total amount to be charged
+  </Step>
+
+  <Step title="Accept or Decline">
+    You have two options:
+
+    ### Purchase Now
+    Proceed to checkout to secure your ticket.
+
+    ### Let It Expire
+    If you no longer want the ticket, simply wait for the offer to expire. The ticket will automatically go to the next person in line.
+
+    <Warning>
+      Once you start the checkout process, you cannot cancel. Complete the payment or abandon the session before the timer expires.
+    </Warning>
+  </Step>
+</Steps>
+
+## Purchase Flow
+
+<Steps>
+  <Step title="Initiate Checkout">
+    Click the **Purchase** or **Buy Ticket** button:
+
+    The system verifies:
+    - Your offer is still valid
+    - Offer hasn't expired
+    - Event is still active
+    - Waiting list entry belongs to you
+  </Step>
+
+  <Step title="Stripe Checkout">
+    You're redirected to Stripe's secure checkout:
+
+    **Checkout details:**
+    - Event name and description
+    - Price in GBP
+    - Application fee (1% to platform)
+    - Session expires with your offer (30 minutes)
+
+    **Payment methods:**
+    - Credit card
+    - Debit card
+    - Other Stripe-supported methods
+
+    <Info>
+      Payments are processed through Stripe Connect. Your payment goes directly to the event organizer (minus the 1% platform fee).
+    </Info>
+  </Step>
+
+  <Step title="Complete Payment">
+    Enter your payment details:
+
+    1. Card number
+    2. Expiration date
+    3. CVC code
+    4. Billing address
+    5. Click **Pay**
+
+    The checkout session has these characteristics:
+    - Secure HTTPS connection
+    - PCI compliant processing
+    - Auto-expires with your ticket offer
+  </Step>
+
+  <Step title="Payment Confirmation">
+    After successful payment:
+
+    - You're redirected to `/tickets/purchase-success?session_id={CHECKOUT_SESSION_ID}`
+    - Payment intent is recorded
+    - Ticket is created in the database
+    - Your waiting list status updates to "purchased"
+    - Next person in line receives an offer automatically
+
+    <Note>
+      The queue automatically processes after your purchase, offering the ticket to the next waiting person.
+    </Note>
+  </Step>
+</Steps>
+
+## Receiving Your Ticket
+
+<Steps>
+  <Step title="Access Your Tickets">
+    Navigate to your tickets page:
+
+    - View all purchased tickets
+    - See ticket status (valid, used, refunded, cancelled)
+    - Access event details
+  </Step>
+
+  <Step title="QR Code Ticket">
+    Each ticket includes:
+
+    - Unique ticket ID
+    - Event information
+    - QR code for entry
+    - Purchase date and amount
+    - Payment reference (payment intent ID)
+
+    **Ticket Status:**
+    - `valid`: Ready to use
+    - `used`: Already scanned at entry
+    - `refunded`: Refund processed
+    - `cancelled`: Event cancelled
+  </Step>
+
+  <Step title="Event Day">
+    On the day of the event:
+
+    1. Bring your ticket (digital or printed)
+    2. Present QR code at entry
+    3. Staff scans your ticket
+    4. Status updates to "used"
+    5. Enjoy the event!
+
+    <Tip>
+      Save a screenshot of your QR code in case of connectivity issues at the venue.
+    </Tip>
+  </Step>
+</Steps>
+
+## Understanding Offer Expiration
+
+If you don't purchase within 30 minutes:
+
+1. **Offer expires automatically**
+   - A scheduled job runs at expiration time
+   - Your status changes to "expired"
+
+2. **Ticket returns to pool**
+   - Next person in queue receives the offer
+   - Process continues down the line
+
+3. **You remain in queue**
+   - Your expired entry stays in the system
+   - You won't receive another offer for this event
+   - To try again, you must leave and rejoin the waiting list
+
+<Warning>
+  **Backup cleanup:** A periodic job (runs regularly) catches any offers that didn't expire properly, ensuring system reliability.
+</Warning>
+
+## Waiting List Insights
+
+### Queue Position
+
+Your position is calculated by:
+- Number of people who joined before you
+- People currently in "waiting" or "offered" status
+- Purchased tickets don't count in position
+
+**Example:**
+- 5 people joined before you
+- 2 already purchased
+- 1 has active offer
+- Your position: #4 (3 people ahead + you)
+
+### Rate Limiting
+
+To prevent abuse:
+- **Limit:** 3 waiting list joins
+- **Window:** 30 minutes
+- **Reset:** After 30 minutes
+
+**Error message example:**
+```
+You've joined the waiting list too many times. 
+Please wait 15 minutes before trying again.
+```
+
+## Common Scenarios
+
+<AccordionGroup>
+  <Accordion title="What if tickets become available while I'm in the queue?">
+    The system automatically processes the queue:
+    1. Detects available spots
+    2. Offers tickets to next users in line (in order)
+    3. Updates your status to "offered"
+    4. Starts your 30-minute countdown
+    
+    You'll receive a notification to complete your purchase.
+  </Accordion>
+
+  <Accordion title="Can I buy multiple tickets?">
+    Currently, each user can purchase one ticket per event. To buy multiple tickets, each person needs their own account and waiting list entry.
+  </Accordion>
+
+  <Accordion title="What happens if the event is cancelled?">
+    - All waiting list entries are deleted
+    - Purchased tickets are refunded
+    - You'll be notified of the cancellation
+    - See [Managing Refunds](/guides/managing-refunds) for details
+  </Accordion>
+
+  <Accordion title="I joined the waiting list but don't see my position">
+    Check that:
+    - You're logged in with the same account
+    - The event is still active (not cancelled)
+    - Your entry hasn't expired
+    - Refresh the page to see updated status
+  </Accordion>
+
+  <Accordion title="Can I cancel my waiting list entry?">
+    You can release your ticket offer if you have one. This lets the next person in line get the ticket. Look for a "Release Ticket" button on the event page.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Request a Refund" icon="rotate-left" href="/guides/managing-refunds">
+    Learn how to request a refund if you can't attend
+  </Card>
+
+  <Card title="Sell Tickets" icon="ticket" href="/guides/selling-tickets">
+    Want to create your own event? Start selling tickets
+  </Card>
+</CardGroup>

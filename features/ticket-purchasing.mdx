@@ -1,0 +1,492 @@
+---
+title: 'Ticket Purchasing'
+description: 'Complete ticket purchase flow with Stripe integration'
+icon: 'credit-card'
+---
+
+Ticket Hub uses Stripe Checkout to handle secure payment processing for ticket purchases. The system integrates with Stripe Connect to enable direct payouts to event organizers.
+
+## Ticket Schema
+
+Tickets are stored with the following schema:
+
+<CodeGroup>
+```typescript convex/schema.ts
+tickets: defineTable({
+  eventId: v.id("events"),
+  userId: v.string(),
+  purchasedAt: v.number(),
+  status: v.union(
+    v.literal("valid"),
+    v.literal("used"),
+    v.literal("refunded"),
+    v.literal("cancelled")
+  ),
+  paymentIntentId: v.optional(v.string()),
+  amount: v.optional(v.number()),
+})
+  .index("by_event", ["eventId"])
+  .index("by_user", ["userId"])
+  .index("by_user_event", ["userId", "eventId"])
+  .index("by_payment_intent", ["paymentIntentId"])
+```
+</CodeGroup>
+
+## Purchase Flow
+
+<Tabs>
+  <Tab title="Buyer Perspective">
+    <Steps>
+      <Step title="Join Waiting List">
+        When a user wants to purchase a ticket, they first join the waiting list. If tickets are available, they immediately receive an offer.
+        
+        <Note>
+        Ticket offers expire after 30 minutes to ensure fair access to all users.
+        </Note>
+      </Step>
+
+      <Step title="Receive Offer">
+        If the user receives an offer, a countdown timer displays the remaining time to complete the purchase.
+        
+        From `src/components/purchase-ticket.tsx:29-54`:
+        ```typescript
+        const offerExpiresAt = queuePosition?.offerExpiresAt ?? 0;
+        const isExpired = Date.now() > offerExpiresAt;
+
+        useEffect(() => {
+          const calculateTimeRemaining = () => {
+            if (isExpired) {
+              setTimeRemaining("Expired");
+              return;
+            }
+
+            const diff = offerExpiresAt - Date.now();
+            const minutes = Math.floor(diff / 1000 / 60);
+            const seconds = Math.floor((diff / 1000) % 60);
+
+            if (minutes > 0) {
+              setTimeRemaining(
+                `${minutes} minute${minutes === 1 ? "" : "s"} ${seconds} second${
+                  seconds === 1 ? "" : "s"
+                }`
+              );
+            } else {
+              setTimeRemaining(`${seconds} second${seconds === 1 ? "" : "s"}`);
+            }
+          };
+
+          calculateTimeRemaining();
+          const interval = setInterval(calculateTimeRemaining, 1000);
+          return () => clearInterval(interval);
+        }, [offerExpiresAt, isExpired]);
+        ```
+      </Step>
+
+      <Step title="Stripe Checkout">
+        Users click "Purchase Your Ticket Now" and are redirected to Stripe Checkout for secure payment processing.
+        
+        ```typescript
+        const handlePurchase = async () => {
+          if (!user) return;
+
+          try {
+            setIsLoading(true);
+            const { sessionUrl } = await createStripeCheckoutSession({
+              eventId,
+            });
+
+            if (sessionUrl) {
+              router.push(sessionUrl);
+            }
+          } catch (error) {
+            console.error("Error creating checkout session:", error);
+          } finally {
+            setIsLoading(false);
+          }
+        };
+        ```
+      </Step>
+
+      <Step title="Payment Confirmation">
+        After successful payment, Stripe redirects the user back to the success page with their ticket details.
+      </Step>
+
+      <Step title="Receive Ticket with QR Code">
+        The ticket is generated with a unique QR code for event check-in.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Technical Implementation">
+    ### 1. Create Stripe Checkout Session
+
+    Located in `src/actions/create-stripe-checkout-session.ts:19-96`:
+
+    ```typescript
+    export async function createStripeCheckoutSession({
+      eventId,
+    }: {
+      eventId: Id<"events">;
+    }) {
+      const { userId } = await auth();
+      if (!userId) throw new Error("Not authenticated");
+
+      const convex = getConvexClient();
+
+      // Get event details
+      const event = await convex.query(api.events.getById, { eventId });
+      if (!event) throw new Error("Event not found");
+
+      // Get waiting list entry
+      const queuePosition = await convex.query(api.waiting_list.getQueuePosition, {
+        eventId,
+        userId,
+      });
+
+      if (!queuePosition || queuePosition.status !== "offered") {
+        throw new Error("No valid ticket offer found");
+      }
+
+      const stripeConnectId = await convex.query(
+        api.users.getUsersStripeConnectId,
+        {
+          userId: event.userId,
+        }
+      );
+
+      if (!stripeConnectId) {
+        throw new Error("Stripe Connect ID not found for owner of the event!");
+      }
+
+      const metadata: StripeCheckoutMetaData = {
+        eventId,
+        userId,
+        waitingListId: queuePosition._id,
+      };
+
+      // Create Stripe Checkout Session
+      const session = await stripe.checkout.sessions.create(
+        {
+          payment_method_types: ["card"],
+          line_items: [
+            {
+              price_data: {
+                currency: "gbp",
+                product_data: {
+                  name: event.name,
+                  description: event.description,
+                },
+                unit_amount: Math.round(event.price * 100),
+              },
+              quantity: 1,
+            },
+          ],
+          payment_intent_data: {
+            application_fee_amount: Math.round(event.price * 100 * 0.01),
+          },
+          expires_at: Math.floor(Date.now() / 1000) + DURATIONS.TICKET_OFFER / 1000,
+          mode: "payment",
+          success_url: `${baseUrl}/tickets/purchase-success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${baseUrl}/event/${eventId}`,
+          metadata,
+        },
+        {
+          stripeAccount: stripeConnectId,
+        }
+      );
+
+      return { sessionId: session.id, sessionUrl: session.url };
+    }
+    ```
+
+    ### 2. Complete Purchase
+
+    After Stripe confirms payment, the ticket is created via `convex/events.ts:192-276`:
+
+    ```typescript
+    export const purchaseTicket = mutation({
+      args: {
+        eventId: v.id("events"),
+        userId: v.string(),
+        waitingListId: v.id("waitingList"),
+        paymentInfo: v.object({
+          paymentIntentId: v.string(),
+          amount: v.number(),
+        }),
+      },
+      handler: async (ctx, { eventId, userId, waitingListId, paymentInfo }) => {
+        // Verify waiting list entry exists and is valid
+        const waitingListEntry = await ctx.db.get(waitingListId);
+        
+        if (!waitingListEntry) {
+          throw new Error("Waiting list entry not found");
+        }
+
+        if (waitingListEntry.status !== WAITING_LIST_STATUS.OFFERED) {
+          throw new Error(
+            "Invalid waiting list status - ticket offer may have expired"
+          );
+        }
+
+        if (waitingListEntry.userId !== userId) {
+          throw new Error("Waiting list entry does not belong to this user");
+        }
+
+        // Verify event exists and is active
+        const event = await ctx.db.get(eventId);
+        
+        if (!event) {
+          throw new Error("Event not found");
+        }
+
+        if (event.is_cancelled) {
+          throw new Error("Event is no longer active");
+        }
+
+        try {
+          // Create ticket with payment info
+          await ctx.db.insert("tickets", {
+            eventId,
+            userId,
+            purchasedAt: Date.now(),
+            status: TICKET_STATUS.VALID ?? "valid",
+            paymentIntentId: paymentInfo.paymentIntentId,
+            amount: paymentInfo.amount,
+          });
+
+          await ctx.db.patch(waitingListId, {
+            status: WAITING_LIST_STATUS.PURCHASED,
+          });
+
+          // Process queue for next person
+          await processQueueX(ctx, eventId);
+        } catch (error) {
+          throw new Error(`Failed to complete ticket purchase: ${error}`);
+        }
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Stripe Integration
+
+### Payment Intent Creation
+
+Ticket Hub uses Stripe's Payment Intent API with Connect to handle payments:
+
+<Info>
+**Application Fee**: Ticket Hub charges a 1% platform fee on each ticket sale, automatically deducted during payment processing.
+</Info>
+
+```typescript
+payment_intent_data: {
+  application_fee_amount: Math.round(event.price * 100 * 0.01),
+}
+```
+
+### Checkout Session Configuration
+
+<ParamField path="payment_method_types" type="array">
+  Supported payment methods (currently card only)
+</ParamField>
+
+<ParamField path="expires_at" type="number">
+  Session expiration time (30 minutes to match ticket offer duration)
+</ParamField>
+
+<ParamField path="metadata" type="object">
+  Custom data passed through the checkout process:
+  - `eventId`: Event identifier
+  - `userId`: Buyer's user ID
+  - `waitingListId`: Reference to the ticket offer
+</ParamField>
+
+<ParamField path="stripeAccount" type="string">
+  Event organizer's Stripe Connect account ID for direct payout
+</ParamField>
+
+## Ticket Status Lifecycle
+
+From `convex/constant.ts:17-22`:
+
+```typescript
+export const TICKET_STATUS: Record<string, Doc<"tickets">["status"]> = {
+  VALID: "valid",
+  USED: "used",
+  REFUNDED: "refunded",
+  CANCELLED: "cancelled",
+} as const;
+```
+
+<Steps>
+  <Step title="valid">
+    Ticket is purchased and can be used for event entry
+  </Step>
+  <Step title="used">
+    Ticket has been scanned and used for event entry
+  </Step>
+  <Step title="refunded">
+    Ticket was refunded and is no longer valid
+  </Step>
+  <Step title="cancelled">
+    Event was cancelled and ticket is invalidated
+  </Step>
+</Steps>
+
+### Update Ticket Status
+
+From `convex/tickets.ts:50-63`:
+
+```typescript
+export const updateTicketStatus = mutation({
+  args: {
+    ticketId: v.id("tickets"),
+    status: v.union(
+      v.literal("valid"),
+      v.literal("used"),
+      v.literal("refunded"),
+      v.literal("cancelled")
+    ),
+  },
+  handler: async (ctx, { ticketId, status }) => {
+    await ctx.db.patch(ticketId, { status });
+  },
+});
+```
+
+## QR Code Generation
+
+Each ticket includes a unique QR code for event check-in. The QR code contains the ticket ID.
+
+### Ticket Display Component
+
+From `src/components/ticket.tsx:126-136`:
+
+```typescript
+{/* Right Column - QR Code */}
+<div className="flex flex-col items-center justify-center border-l border-gray-200 pl-6">
+  <div
+    className={`bg-gray-100 p-4 rounded-lg ${ticket.event.is_cancelled ? "opacity-50" : ""}`}
+  >
+    <QRCode value={ticket._id} className="w-32 h-32" />
+  </div>
+  <p className="mt-2 text-sm text-gray-500 break-all text-center max-w-[200px] md:max-w-full">
+    Ticket ID: {ticket._id}
+  </p>
+</div>
+```
+
+<Note>
+The QR code encodes the ticket's unique ID, which can be scanned at the event for verification.
+</Note>
+
+## Ticket Queries
+
+### Get User's Tickets
+
+Retrieve all tickets for a specific user with event information:
+
+```typescript
+export const getUserTickets = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    const ticketsWithEvents = await Promise.all(
+      tickets.map(async (ticket) => {
+        const event = await ctx.db.get(ticket.eventId);
+        return {
+          ...ticket,
+          event,
+        };
+      })
+    );
+
+    return ticketsWithEvents;
+  },
+});
+```
+
+### Get Ticket with Details
+
+From `convex/tickets.ts:22-35`:
+
+```typescript
+export const getTicketWithDetails = query({
+  args: { ticketId: v.id("tickets") },
+  handler: async (ctx, { ticketId }) => {
+    const ticket = await ctx.db.get(ticketId);
+    if (!ticket) return null;
+
+    const event = await ctx.db.get(ticket.eventId);
+
+    return {
+      ...ticket,
+      event,
+    };
+  },
+});
+```
+
+## Release Ticket Offer
+
+<Warning>
+Users can release their ticket offer before purchasing, which makes it available to the next person in the waiting list.
+</Warning>
+
+From `src/components/release-ticket.tsx:10-46`:
+
+```typescript
+export default function ReleaseTicket({
+  eventId,
+  waitingListId,
+}: {
+  eventId: Id<"events">;
+  waitingListId: Id<"waitingList">;
+}) {
+  const [isReleasing, setIsReleasing] = useState(false);
+  const releaseTicket = useMutation(api.waiting_list.releaseTicket);
+
+  const handleRelease = async () => {
+    if (!confirm("Are you sure you want to release your ticket offer?")) return;
+
+    try {
+      setIsReleasing(true);
+      await releaseTicket({
+        eventId,
+        waitingListId,
+      });
+    } catch (error) {
+      console.error("Error releasing ticket:", error);
+    } finally {
+      setIsReleasing(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleRelease}
+      disabled={isReleasing}
+      className="mt-2 w-full flex cursor-pointer items-center justify-center gap-2 py-2 px-4 bg-red-100 text-red-700 rounded-lg hover:bg-red-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
+    >
+      <XCircle className="w-4 h-4" />
+      {isReleasing ? "Releasing..." : "Release Ticket Offer"}
+    </button>
+  );
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Waiting List" icon="users" href="/features/waiting-list">
+    Learn about the queue system and ticket offers
+  </Card>
+  <Card title="Seller Dashboard" icon="chart-line" href="/features/seller-dashboard">
+    View ticket sales and revenue
+  </Card>
+</CardGroup>

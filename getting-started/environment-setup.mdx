@@ -1,0 +1,399 @@
+---
+title: 'Environment Setup'
+description: 'Configure environment variables for Ticket Hub'
+icon: 'gear'
+---
+
+## Overview
+
+Ticket Hub uses `@t3-oss/env-nextjs` for type-safe environment variable validation. This ensures that all required variables are set before the app starts, preventing runtime errors.
+
+## Environment Schema
+
+The environment configuration is defined in `src/env.ts`:
+
+```typescript src/env.ts
+import { createEnv } from "@t3-oss/env-nextjs";
+import { z } from "zod";
+
+const env = createEnv({
+  server: {
+    NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+    PORT: z.coerce.number().default(3000).optional(),
+    CLERK_SECRET_KEY: z.string().min(1),
+    CONVEX_DEPLOYMENT: z.string().min(1),
+    CLERK_WEBHOOK_SECRET: z.string().min(1),
+    STRIPE_SECRET_KEY: z.string().min(1),
+    VERCEL_PROJECT_PRODUCTION_URL: z.string().min(1),
+    STRIPE_WEBHOOK_SECRET: z.string().min(1),
+    CONVEX_DEPLOY_KEY: z.string().min(1),
+  },
+  client: {
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
+    NEXT_PUBLIC_APP_URL: z.string(),
+    NEXT_PUBLIC_CLERK_SIGN_IN_URL: z.string().min(1),
+    NEXT_PUBLIC_CLERK_SIGN_UP_URL: z.string().min(1),
+    NEXT_PUBLIC_CONVEX_URL: z.string().min(1),
+  },
+  runtimeEnv: {
+    NODE_ENV: process.env.NODE_ENV,
+    PORT: process.env.PORT,
+    CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+    NEXT_PUBLIC_CLERK_SIGN_IN_URL: process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL,
+    NEXT_PUBLIC_CLERK_SIGN_UP_URL: process.env.NEXT_PUBLIC_CLERK_SIGN_UP_URL,
+    NEXT_PUBLIC_CONVEX_URL: process.env.NEXT_PUBLIC_CONVEX_URL,
+    CONVEX_DEPLOYMENT: process.env.CONVEX_DEPLOYMENT,
+    CLERK_WEBHOOK_SECRET: process.env.CLERK_WEBHOOK_SECRET,
+    STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
+    VERCEL_PROJECT_PRODUCTION_URL: process.env.VERCEL_PROJECT_PRODUCTION_URL,
+    STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
+    CONVEX_DEPLOY_KEY: process.env.CONVEX_DEPLOY_KEY,
+  },
+  skipValidation: !!process.env.SKIP_ENV_VALIDATION,
+  emptyStringAsUndefined: true,
+});
+
+export default env;
+```
+
+<Note>
+  The schema automatically validates all environment variables at build time. Missing or invalid variables will cause the build to fail with clear error messages.
+</Note>
+
+## Required Environment Variables
+
+### Clerk Authentication
+
+<Steps>
+  <Step title="Get Clerk API Keys">
+    1. Go to [clerk.com](https://clerk.com) and sign in
+    2. Select your application
+    3. Navigate to **API Keys**
+    4. Copy the keys
+  </Step>
+
+  <Step title="Add to .env.local">
+    ```bash
+    # Clerk Authentication
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+    CLERK_SECRET_KEY=sk_test_...
+    CLERK_WEBHOOK_SECRET=whsec_...
+    
+    # Clerk URLs
+    NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+    NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+    ```
+  </Step>
+</Steps>
+
+<ParamField path="NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" type="string" required>
+  **Client-side** publishable key from Clerk dashboard.
+  
+  - Prefix: `pk_test_` (test) or `pk_live_` (production)
+  - Safe to expose in client-side code
+  - Used to initialize Clerk in the browser
+</ParamField>
+
+<ParamField path="CLERK_SECRET_KEY" type="string" required>
+  **Server-side** secret key from Clerk dashboard.
+  
+  - Prefix: `sk_test_` (test) or `sk_live_` (production)
+  - Keep this secure - never expose in client code
+  - Used for server-side API calls
+</ParamField>
+
+<ParamField path="CLERK_WEBHOOK_SECRET" type="string" required>
+  Signing secret for verifying Clerk webhook requests.
+  
+  - Prefix: `whsec_`
+  - Found in Clerk dashboard → **Webhooks** → Your endpoint
+  - Ensures webhooks are authentic
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_CLERK_SIGN_IN_URL" type="string" default="/sign-in">
+  Path to your sign-in page. Must match Clerk dashboard configuration.
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_CLERK_SIGN_UP_URL" type="string" default="/sign-up">
+  Path to your sign-up page. Must match Clerk dashboard configuration.
+</ParamField>
+
+### Convex Backend
+
+<Steps>
+  <Step title="Initialize Convex">
+    Run Convex development mode:
+    
+    ```bash
+    npx convex dev
+    ```
+    
+    This will:
+    - Create a Convex project (first time)
+    - Deploy your schema and functions
+    - Output your deployment URL
+  </Step>
+
+  <Step title="Copy Convex URL">
+    After running `npx convex dev`, copy the URL displayed:
+    
+    ```bash
+    NEXT_PUBLIC_CONVEX_URL=https://your-deployment.convex.cloud
+    ```
+  </Step>
+
+  <Step title="Get deployment credentials">
+    For production deployments:
+    
+    1. Go to [convex.dev](https://convex.dev)
+    2. Select your project
+    3. Go to **Settings** → **Deploy Keys**
+    4. Create a new deploy key
+    
+    ```bash
+    CONVEX_DEPLOYMENT=your-deployment-name
+    CONVEX_DEPLOY_KEY=...
+    ```
+  </Step>
+</Steps>
+
+<ParamField path="NEXT_PUBLIC_CONVEX_URL" type="string" required>
+  Your Convex deployment URL.
+  
+  - Format: `https://[deployment-name].convex.cloud`
+  - Automatically generated when you run `npx convex dev`
+  - Different for each environment (dev, staging, prod)
+</ParamField>
+
+<ParamField path="CONVEX_DEPLOYMENT" type="string" required>
+  Your Convex deployment identifier.
+  
+  - Found in Convex dashboard → **Settings**
+  - Used for production deployments
+  - Format: `prod:your-deployment-name`
+</ParamField>
+
+<ParamField path="CONVEX_DEPLOY_KEY" type="string" required>
+  Deploy key for automated deployments.
+  
+  - Created in Convex dashboard → **Settings** → **Deploy Keys**
+  - Required for CI/CD pipelines
+  - Keep this secret
+</ParamField>
+
+### Stripe Payments
+
+<Steps>
+  <Step title="Get Stripe API Keys">
+    1. Go to [stripe.com](https://stripe.com) and sign in
+    2. Navigate to **Developers** → **API Keys**
+    3. Copy your **Secret Key**
+  </Step>
+
+  <Step title="Set up Stripe webhooks">
+    1. Go to **Developers** → **Webhooks**
+    2. Click **Add endpoint**
+    3. Enter URL: `https://your-app.vercel.app/api/webhooks/stripe`
+    4. Select events:
+       - `payment_intent.succeeded`
+       - `payment_intent.payment_failed`
+       - `charge.refunded`
+    5. Copy the **Signing Secret**
+  </Step>
+
+  <Step title="Add to .env.local">
+    ```bash
+    # Stripe
+    STRIPE_SECRET_KEY=sk_test_...
+    STRIPE_WEBHOOK_SECRET=whsec_...
+    ```
+  </Step>
+</Steps>
+
+<ParamField path="STRIPE_SECRET_KEY" type="string" required>
+  Your Stripe secret API key.
+  
+  - Prefix: `sk_test_` (test mode) or `sk_live_` (live mode)
+  - Found in Stripe dashboard → **API Keys**
+  - Used for creating payment intents and processing charges
+  - **Never** expose this in client-side code
+</ParamField>
+
+<ParamField path="STRIPE_WEBHOOK_SECRET" type="string" required>
+  Signing secret for Stripe webhook verification.
+  
+  - Prefix: `whsec_`
+  - Found in Stripe dashboard → **Webhooks** → Your endpoint
+  - Ensures webhook events are genuine
+</ParamField>
+
+### Application Configuration
+
+<ParamField path="NEXT_PUBLIC_APP_URL" type="string" required>
+  The public URL of your application.
+  
+  - Development: `http://localhost:3000`
+  - Production: `https://your-app.vercel.app`
+  - Used for redirects and callback URLs
+</ParamField>
+
+<ParamField path="VERCEL_PROJECT_PRODUCTION_URL" type="string" required>
+  Your Vercel production URL.
+  
+  - Format: `your-project.vercel.app` (without `https://`)
+  - Automatically set by Vercel in production
+  - For local development, use your expected production URL
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string" default="development">
+  Application environment.
+  
+  - Values: `development`, `test`, `production`
+  - Automatically set by Next.js
+  - Optional to set manually
+</ParamField>
+
+<ParamField path="PORT" type="number" default="3000">
+  Port for local development server.
+  
+  - Default: `3000`
+  - Optional - only needed if you want a different port
+</ParamField>
+
+## Complete .env.local Example
+
+```bash .env.local
+# Application
+NODE_ENV=development
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+VERCEL_PROJECT_PRODUCTION_URL=ticket-hub.vercel.app
+
+# Clerk Authentication
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_ZXhhbXBsZS1jbGVyay0xMjM0NTY3OA==
+CLERK_SECRET_KEY=sk_test_ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890
+CLERK_WEBHOOK_SECRET=whsec_abcdefghijklmnopqrstuvwxyz123456
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+
+# Convex
+NEXT_PUBLIC_CONVEX_URL=https://happy-elephant-123.convex.cloud
+CONVEX_DEPLOYMENT=prod:happy-elephant-123
+CONVEX_DEPLOY_KEY=prod:happy-elephant-123|1234567890abcdef
+
+# Stripe
+STRIPE_SECRET_KEY=sk_test_51AbCdEf123456789GhIjKlMnOpQrStUvWxYz
+STRIPE_WEBHOOK_SECRET=whsec_1234567890abcdefghijklmnopqrstuvwxyz
+```
+
+<Warning>
+  Never commit your `.env.local` file to version control. Add it to `.gitignore`.
+</Warning>
+
+## Environment-Specific Configuration
+
+### Development
+
+```bash .env.local
+NODE_ENV=development
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# Use Clerk/Stripe test keys
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+STRIPE_SECRET_KEY=sk_test_...
+
+# Use Convex dev deployment
+NEXT_PUBLIC_CONVEX_URL=https://dev-deployment.convex.cloud
+```
+
+### Production
+
+```bash .env.production
+NODE_ENV=production
+NEXT_PUBLIC_APP_URL=https://ticket-hub.vercel.app
+VERCEL_PROJECT_PRODUCTION_URL=ticket-hub.vercel.app
+
+# Use Clerk/Stripe live keys
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
+STRIPE_SECRET_KEY=sk_live_...
+
+# Use Convex production deployment
+NEXT_PUBLIC_CONVEX_URL=https://prod-deployment.convex.cloud
+CONVEX_DEPLOYMENT=prod:your-deployment
+```
+
+## Validation and Type Safety
+
+### Accessing Environment Variables
+
+Import from `src/env.ts` for type-safe access:
+
+```typescript
+import env from "@/env";
+
+// ✅ Type-safe and validated
+const clerkKey = env.CLERK_SECRET_KEY;
+const convexUrl = env.NEXT_PUBLIC_CONVEX_URL;
+
+// ❌ Avoid accessing process.env directly
+// const key = process.env.CLERK_SECRET_KEY; // Not type-safe
+```
+
+### Skipping Validation
+
+For Docker builds or specific CI scenarios:
+
+```bash
+SKIP_ENV_VALIDATION=true
+```
+
+<Warning>
+  Only skip validation when absolutely necessary. Missing variables will cause runtime errors.
+</Warning>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Build fails with 'Invalid environment variables'">
+    Check that all required variables are set in your `.env.local` file. The error message will tell you exactly which variables are missing or invalid.
+  </Accordion>
+
+  <Accordion title="'NEXT_PUBLIC_* variables not available in browser'">
+    Make sure:
+    - Variables start with `NEXT_PUBLIC_` prefix
+    - You've restarted the dev server after adding them
+    - They're in `.env.local`, not just exported in your shell
+  </Accordion>
+
+  <Accordion title="Webhook secrets not working">
+    Verify:
+    - The webhook URL is correct and publicly accessible
+    - The signing secret matches exactly (no extra spaces)
+    - You're using the correct environment (test vs. live)
+  </Accordion>
+
+  <Accordion title="Convex URL not found">
+    Run `npx convex dev` to:
+    - Generate the Convex deployment
+    - Get the correct `NEXT_PUBLIC_CONVEX_URL`
+    - Ensure Convex is properly initialized
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/getting-started/quickstart">
+    Get the app running with these environment variables
+  </Card>
+  <Card title="Authentication" icon="shield-check" href="/getting-started/authentication">
+    Deep dive into Clerk authentication setup
+  </Card>
+  <Card title="Stripe Integration" icon="credit-card" href="/integrations/stripe-payments">
+    Set up payment processing with Stripe
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/events/overview">
+    Explore the Convex API functions
+  </Card>
+</CardGroup>

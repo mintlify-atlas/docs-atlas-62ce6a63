@@ -1,0 +1,318 @@
+---
+title: 'processQueue'
+description: 'Internal endpoint to process waiting list and create ticket offers'
+---
+
+## Mutation
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useMutation } from "convex/react";
+
+const processQueue = useMutation(api.waiting_list.processQueue);
+```
+
+**Location**: `convex/waiting_list.ts:162-167`
+
+<Warning>
+  This is an internal endpoint primarily used by automated systems. Direct calls should be rare and carefully considered.
+</Warning>
+
+## Description
+
+Processes the waiting list queue for an event and creates time-limited ticket offers for eligible users. This endpoint calculates available ticket spots, considering both purchased tickets and active offers, then creates offers for the next users in line.
+
+This mutation is automatically triggered when:
+- A ticket offer expires (`expireOffer` internal mutation)
+- Expired offers are cleaned up (`cleanupExpiredOffers` cron job)
+- Tickets are released back to the queue
+
+## Parameters
+
+<ParamField body="eventId" type="Id<'events'>" required>
+  The ID of the event to process the queue for
+</ParamField>
+
+## Response
+
+Returns `void`. The mutation silently creates offers for eligible users without returning data.
+
+## How It Works
+
+### 1. Calculate Available Spots
+
+Determines how many tickets can be offered:
+
+```typescript
+const purchasedCount = await ctx.db
+  .query("tickets")
+  .withIndex("by_event", (q) => q.eq("eventId", eventId))
+  .collect()
+  .then((tickets) =>
+    tickets.filter((t) =>
+      t.status === TICKET_STATUS.VALID ||
+      t.status === TICKET_STATUS.USED
+    ).length
+  );
+
+const activeOffers = await ctx.db
+  .query("waitingList")
+  .withIndex("by_event_status", (q) =>
+    q.eq("eventId", eventId)
+     .eq("status", WAITING_LIST_STATUS.OFFERED)
+  )
+  .collect()
+  .then((entries) =>
+    entries.filter((e) => (e.offerExpiresAt ?? 0) > now).length
+  );
+
+const availableSpots = event.totalTickets - (purchasedCount + activeOffers);
+```
+
+**Formula**: `Available Spots = Total Tickets - (Purchased + Active Offers)`
+
+### 2. Get Next Users in Line
+
+Retrieves waiting users in creation order (FIFO):
+
+```typescript
+const waitingUsers = await ctx.db
+  .query("waitingList")
+  .withIndex("by_event_status", (q) =>
+    q.eq("eventId", eventId)
+     .eq("status", WAITING_LIST_STATUS.WAITING)
+  )
+  .order("asc")
+  .take(availableSpots);
+```
+
+### 3. Create Time-Limited Offers
+
+For each selected user:
+
+1. Updates status to `offered`
+2. Sets `offerExpiresAt` to current time + 30 minutes
+3. Schedules automatic expiration job
+
+```typescript
+const now = Date.now();
+for (const user of waitingUsers) {
+  await ctx.db.patch(user._id, {
+    status: WAITING_LIST_STATUS.OFFERED,
+    offerExpiresAt: now + DURATIONS.TICKET_OFFER, // 30 minutes
+  });
+
+  await ctx.scheduler.runAfter(
+    DURATIONS.TICKET_OFFER,
+    internal.waiting_list.expireOffer,
+    {
+      waitingListId: user._id,
+      eventId,
+    }
+  );
+}
+```
+
+## Automatic Triggers
+
+### Offer Expiration
+
+When a ticket offer expires, the queue is automatically processed:
+
+**Code** (`convex/waiting_list.ts:173-188`):
+```typescript
+export const expireOffer = internalMutation({
+  args: {
+    waitingListId: v.id("waitingList"),
+    eventId: v.id("events"),
+  },
+  handler: async (ctx, { waitingListId, eventId }) => {
+    const offer = await ctx.db.get(waitingListId);
+    if (!offer || offer.status !== WAITING_LIST_STATUS.OFFERED) return;
+
+    await ctx.db.patch(waitingListId, {
+      status: WAITING_LIST_STATUS.EXPIRED,
+    });
+
+    await processQueueX(ctx, eventId); // Process queue
+  },
+});
+```
+
+### Cleanup Job
+
+A periodic cron job catches expired offers and processes affected queues:
+
+**Code** (`convex/waiting_list.ts:199-230`):
+```typescript
+export const cleanupExpiredOffers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const expiredOffers = await ctx.db
+      .query("waitingList")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), WAITING_LIST_STATUS.OFFERED),
+          q.lt(q.field("offerExpiresAt"), now)
+        )
+      )
+      .collect();
+
+    // Group by event for batch processing
+    const grouped = groupByEvent(expiredOffers);
+
+    // Process each event's expired offers
+    for (const [eventId, offers] of Object.entries(grouped)) {
+      await Promise.all(
+        offers.map((offer) =>
+          ctx.db.patch(offer._id, {
+            status: WAITING_LIST_STATUS.EXPIRED,
+          })
+        )
+      );
+
+      await processQueueX(ctx, eventId); // Process queue
+    }
+  },
+});
+```
+
+## Example Scenarios
+
+### Scenario 1: Single Spot Available
+
+**Initial State**:
+- Event capacity: 100 tickets
+- Purchased tickets: 99
+- Active offers: 0
+- Waiting users: 5
+
+**After Processing**:
+- Available spots: 1
+- User at position 1 receives offer
+- 4 users remain in `waiting` status
+
+### Scenario 2: Multiple Offers Expire
+
+**Initial State**:
+- Event capacity: 50 tickets
+- Purchased tickets: 45
+- Active offers: 3 (all expire at same time)
+- Waiting users: 10
+
+**After Expiration Cleanup**:
+- Expired offers marked as `expired`
+- Available spots: 3
+- Next 3 users in queue receive offers
+- 7 users remain waiting
+
+### Scenario 3: No Available Spots
+
+**Initial State**:
+- Event capacity: 100 tickets
+- Purchased tickets: 95
+- Active offers: 5
+- Waiting users: 20
+
+**After Processing**:
+- Available spots: 0
+- No new offers created
+- All 20 users remain in `waiting` status
+
+## Manual Usage
+
+While primarily automated, you can manually trigger queue processing:
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useMutation } from "convex/react";
+import { Id } from "@/convex/_generated/dataModel";
+
+function AdminQueueControl({ eventId }: { eventId: Id<"events"> }) {
+  const processQueue = useMutation(api.waiting_list.processQueue);
+
+  const handleProcess = async () => {
+    try {
+      await processQueue({ eventId });
+      alert("Queue processed successfully");
+    } catch (error) {
+      alert(`Error: ${error.message}`);
+    }
+  };
+
+  return (
+    <button onClick={handleProcess} className="admin-button">
+      Manually Process Queue
+    </button>
+  );
+}
+```
+
+## Performance Considerations
+
+### Batch Processing
+
+The cleanup job groups expired offers by event to minimize database operations:
+
+```typescript
+function groupByEvent(
+  offers: Array<{ eventId: Id<"events">; _id: Id<"waitingList"> }>
+) {
+  return offers.reduce(
+    (acc, offer) => {
+      const eventId = offer.eventId;
+      if (!acc[eventId]) {
+        acc[eventId] = [];
+      }
+      acc[eventId].push(offer);
+      return acc;
+    },
+    {} as Record<Id<"events">, typeof offers>
+  );
+}
+```
+
+### Query Optimization
+
+Uses database indexes for efficient queries:
+- `by_event_status` - Filter waiting list by event and status
+- `by_event` - Filter tickets by event
+
+## Error Handling
+
+```typescript
+export const processQueue = mutation({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error("Event not found");
+    
+    return processQueueX(ctx, eventId);
+  },
+});
+```
+
+**Possible Errors**:
+- `"Event not found"` - Event ID doesn't exist
+
+## Related Endpoints
+
+- [joinWaitingList](/api/waiting-list/join) - Add user to waiting list
+- [getQueuePosition](/api/waiting-list/get-position) - Check queue position
+- [expireOffer](/api/waiting-list/expire-offer) - Internal offer expiration handler
+- [releaseTicket](/api/waiting-list/release-ticket) - Release an offered ticket
+
+## Best Practices
+
+<Tip>
+  **Automatic Processing**: Let the system handle queue processing automatically through offer expiration and cleanup jobs. Manual processing should only be needed for debugging or special circumstances.
+</Tip>
+
+<Info>
+  **Fair Distribution**: The queue uses FIFO (First In, First Out) ordering based on `_creationTime` to ensure fairness.
+</Info>
+
+<Warning>
+  **Concurrency**: The system handles concurrent offer expirations by grouping operations and processing them in batch to maintain consistency.
+</Warning>

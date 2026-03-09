@@ -1,0 +1,531 @@
+---
+title: 'Waiting List & Queue System'
+description: 'Fair ticket distribution with automated queue management'
+icon: 'users'
+---
+
+Ticket Hub implements a sophisticated waiting list system that ensures fair ticket distribution. When events sell out, users join a queue and automatically receive ticket offers as they become available.
+
+## Waiting List Schema
+
+<CodeGroup>
+```typescript convex/schema.ts
+waitingList: defineTable({
+  eventId: v.id("events"),
+  userId: v.string(),
+  status: v.union(
+    v.literal("waiting"),
+    v.literal("offered"),
+    v.literal("purchased"),
+    v.literal("expired")
+  ),
+  offerExpiresAt: v.optional(v.number()),
+})
+  .index("by_event_status", ["eventId", "status"])
+  .index("by_user_event", ["userId", "eventId"])
+  .index("by_user", ["userId"])
+```
+</CodeGroup>
+
+## Queue Status Flow
+
+From `convex/constant.ts:9-15`:
+
+```typescript
+export const WAITING_LIST_STATUS: Record<string, Doc<"waitingList">["status"]> = {
+  WAITING: "waiting",
+  OFFERED: "offered",
+  PURCHASED: "purchased",
+  EXPIRED: "expired",
+} as const;
+```
+
+<Steps>
+  <Step title="waiting">
+    User is in the queue waiting for a ticket to become available
+  </Step>
+  <Step title="offered">
+    User has been offered a ticket with a 30-minute expiration timer
+  </Step>
+  <Step title="purchased">
+    User completed the purchase and ticket was issued
+  </Step>
+  <Step title="expired">
+    Ticket offer expired before purchase; user returns to end of queue
+  </Step>
+</Steps>
+
+## Joining the Queue
+
+<Tabs>
+  <Tab title="User Experience">
+    <Steps>
+      <Step title="Check Availability">
+        When a user attempts to purchase a ticket, the system first checks if tickets are immediately available.
+      </Step>
+
+      <Step title="Immediate Offer or Queue">
+        - **If available**: User receives an immediate ticket offer (30-minute timer starts)
+        - **If sold out**: User is added to the waiting list
+      </Step>
+
+      <Step title="Queue Position">
+        Users in the queue can see their position and estimated wait time.
+      </Step>
+
+      <Step title="Automatic Notification">
+        When a ticket becomes available, the next user in line automatically receives an offer.
+      </Step>
+    </Steps>
+  </Tab>
+
+  <Tab title="Implementation">
+    ### Join Waiting List Mutation
+
+    From `convex/events.ts:111-189`:
+
+    ```typescript
+    export const joinWaitingList = mutation({
+      args: { eventId: v.id("events"), userId: v.string() },
+      handler: async (ctx, { eventId, userId }) => {
+        // Rate limit check
+        const status = await rateLimiter.limit(ctx, "queueJoin", { key: userId });
+        if (!status.ok) {
+          throw new ConvexError(
+            `You've joined the waiting list too many times. Please wait ${
+              Math.ceil(status.retryAfter / (60 * 1000))
+            } minutes before trying again.`
+          );
+        }
+
+        // Check if user already has an active entry
+        const existingEntry = await ctx.db
+          .query("waitingList")
+          .withIndex("by_user_event", (q) =>
+            q.eq("userId", userId).eq("eventId", eventId)
+          )
+          .filter((q) => q.neq(q.field("status"), WAITING_LIST_STATUS.EXPIRED))
+          .first();
+
+        if (existingEntry) {
+          throw new Error("Already in waiting list for this event");
+        }
+
+        // Verify the event exists
+        const event = await ctx.db.get(eventId);
+        if (!event) throw new Error("Event not found");
+
+        // Check if there are any available tickets right now
+        const { available } = await checkAvailability(ctx, eventId);
+
+        const now = Date.now();
+
+        if (available) {
+          // If tickets are available, create an offer entry
+          const waitingListId = await ctx.db.insert("waitingList", {
+            eventId,
+            userId,
+            status: WAITING_LIST_STATUS.OFFERED ?? "offered",
+            offerExpiresAt: now + DURATIONS.TICKET_OFFER,
+          });
+
+          // Schedule a job to expire this offer
+          await ctx.scheduler.runAfter(
+            DURATIONS.TICKET_OFFER,
+            internal.waiting_list.expireOffer,
+            {
+              waitingListId,
+              eventId,
+            }
+          );
+        } else {
+          // If no tickets available, add to waiting list
+          await ctx.db.insert("waitingList", {
+            eventId,
+            userId,
+            status: WAITING_LIST_STATUS.WAITING ?? "waiting",
+          });
+        }
+
+        return {
+          success: true,
+          status: available
+            ? WAITING_LIST_STATUS.OFFERED
+            : WAITING_LIST_STATUS.WAITING,
+          message: available
+            ? `Ticket offer created - you have ${
+                DURATIONS.TICKET_OFFER / (60 * 1000)
+              } minutes to purchase`
+            : "Added to waiting list - you'll be notified when a ticket becomes available",
+        };
+      },
+    });
+    ```
+  </Tab>
+</Tabs>
+
+## Rate Limiting
+
+<Warning>
+To prevent abuse, users are limited to **3 queue joins per 30 minutes** per event.
+</Warning>
+
+From `convex/events.ts:18-24`:
+
+```typescript
+const rateLimiter = new RateLimiter(components.rateLimiter, {
+  queueJoin: {
+    kind: "fixed window",
+    rate: 3, // 3 joins allowed
+    period: 30 * MINUTE, // in 30 minutes
+  },
+});
+```
+
+When the limit is exceeded:
+
+```typescript
+if (!status.ok) {
+  throw new ConvexError(
+    `You've joined the waiting list too many times. Please wait ${
+      Math.ceil(status.retryAfter / (60 * 1000))
+    } minutes before trying again.`
+  );
+}
+```
+
+## Offer Expiration System
+
+<Info>
+Ticket offers expire after **30 minutes** to ensure tickets don't remain reserved indefinitely.
+</Info>
+
+From `convex/constant.ts:4-6`:
+
+```typescript
+export const DURATIONS = {
+  TICKET_OFFER: 30 * 60 * 1000, // 30 minutes
+} as const;
+```
+
+### Automatic Expiration
+
+When an offer is created, a scheduled job is set to expire it:
+
+```typescript
+await ctx.scheduler.runAfter(
+  DURATIONS.TICKET_OFFER,
+  internal.waiting_list.expireOffer,
+  {
+    waitingListId,
+    eventId,
+  }
+);
+```
+
+### Expire Offer Mutation
+
+From `convex/waiting_list.ts:173-188`:
+
+```typescript
+export const expireOffer = internalMutation({
+  args: {
+    waitingListId: v.id("waitingList"),
+    eventId: v.id("events"),
+  },
+  handler: async (ctx, { waitingListId, eventId }) => {
+    const offer = await ctx.db.get(waitingListId);
+    if (!offer || offer.status !== WAITING_LIST_STATUS.OFFERED) return;
+
+    await ctx.db.patch(waitingListId, {
+      status: WAITING_LIST_STATUS.EXPIRED,
+    });
+
+    await processQueueX(ctx, eventId);
+  },
+});
+```
+
+## Automatic Queue Processing
+
+The system automatically processes the queue and offers tickets to the next eligible users when:
+
+1. A ticket offer expires
+2. A ticket is purchased (makes room for next person)
+3. A ticket is released manually
+4. An event is updated to increase capacity
+
+### Process Queue Function
+
+From `convex/waiting_list.ts:84-160`:
+
+```typescript
+export async function processQueueX(ctx: MutationCtx, eventId: Id<"events">) {
+  const event = await ctx.db.get(eventId);
+  if (!event) throw new Error("Event not found");
+
+  // Calculate available spots
+  const { availableSpots } = await ctx.db
+    .query("events")
+    .filter((q) => q.eq(q.field("_id"), eventId))
+    .first()
+    .then(async (event) => {
+      if (!event) throw new Error("Event not found");
+
+      const purchasedCount = await ctx.db
+        .query("tickets")
+        .withIndex("by_event", (q) => q.eq("eventId", eventId))
+        .collect()
+        .then(
+          (tickets) =>
+            tickets.filter(
+              (t) =>
+                t.status === TICKET_STATUS.VALID ||
+                t.status === TICKET_STATUS.USED
+            ).length
+        );
+
+      const now = Date.now();
+      const activeOffers = await ctx.db
+        .query("waitingList")
+        .withIndex("by_event_status", (q) =>
+          q
+            .eq("eventId", eventId)
+            .eq("status", WAITING_LIST_STATUS.OFFERED ?? "offered")
+        )
+        .collect()
+        .then(
+          (entries) =>
+            entries.filter((e) => (e.offerExpiresAt ?? 0) > now).length
+        );
+
+      return {
+        availableSpots: event.totalTickets - (purchasedCount + activeOffers),
+      };
+    });
+
+  if (availableSpots <= 0) return;
+
+  // Get next users in line
+  const waitingUsers = await ctx.db
+    .query("waitingList")
+    .withIndex("by_event_status", (q) =>
+      q
+        .eq("eventId", eventId)
+        .eq("status", WAITING_LIST_STATUS.WAITING ?? "waiting")
+    )
+    .order("asc")
+    .take(availableSpots);
+
+  // Create time-limited offers for selected users
+  const now = Date.now();
+  for (const user of waitingUsers) {
+    // Update the waiting list entry to OFFERED status
+    await ctx.db.patch(user._id, {
+      status: WAITING_LIST_STATUS.OFFERED,
+      offerExpiresAt: now + DURATIONS.TICKET_OFFER,
+    });
+
+    // Schedule expiration job for this offer
+    await ctx.scheduler.runAfter(
+      DURATIONS.TICKET_OFFER,
+      internal.waiting_list.expireOffer,
+      {
+        waitingListId: user._id,
+        eventId,
+      }
+    );
+  }
+}
+```
+
+<Note>
+The queue processing function is called automatically after ticket purchases, offer expirations, and manual releases.
+</Note>
+
+## Queue Position Query
+
+Users can check their position in the queue:
+
+From `convex/waiting_list.ts:37-77`:
+
+```typescript
+export const getQueuePosition = query({
+  args: {
+    eventId: v.id("events"),
+    userId: v.string(),
+  },
+  handler: async (ctx, { eventId, userId }) => {
+    // Get entry for this specific user and event combination
+    const entry = await ctx.db
+      .query("waitingList")
+      .withIndex("by_user_event", (q) =>
+        q.eq("userId", userId).eq("eventId", eventId)
+      )
+      .filter((q) =>
+        q.neq(q.field("status"), WAITING_LIST_STATUS.EXPIRED ?? "expired")
+      )
+      .first();
+
+    if (!entry) return null;
+
+    // Get total number of people ahead in line
+    const peopleAhead = await ctx.db
+      .query("waitingList")
+      .withIndex("by_event_status", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.and(
+          q.lt(q.field("_creationTime"), entry._creationTime),
+          q.or(
+            q.eq(q.field("status"), WAITING_LIST_STATUS.WAITING ?? "waiting"),
+            q.eq(q.field("status"), WAITING_LIST_STATUS.OFFERED ?? "offered")
+          )
+        )
+      )
+      .collect()
+      .then((entries) => entries.length);
+
+    return {
+      ...entry,
+      position: peopleAhead + 1,
+    };
+  },
+});
+```
+
+## Cleanup Job
+
+<Info>
+A periodic cleanup job runs to catch any expired offers that weren't properly processed.
+</Info>
+
+From `convex/waiting_list.ts:199-230`:
+
+```typescript
+export const cleanupExpiredOffers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    // Find all expired but not yet cleaned up offers
+    const expiredOffers = await ctx.db
+      .query("waitingList")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), WAITING_LIST_STATUS.OFFERED),
+          q.lt(q.field("offerExpiresAt"), now)
+        )
+      )
+      .collect();
+
+    // Group by event for batch processing
+    const grouped = groupByEvent(expiredOffers);
+
+    // Process each event's expired offers and update queue
+    for (const [eventId, offers] of Object.entries(grouped)) {
+      await Promise.all(
+        offers.map((offer) =>
+          ctx.db.patch(offer._id, {
+            status: WAITING_LIST_STATUS.EXPIRED,
+          })
+        )
+      );
+
+      await processQueueX(ctx, eventId as Id<"events">);
+    }
+  },
+});
+```
+
+## Check Availability
+
+The system calculates available spots by considering:
+1. Total tickets for the event
+2. Purchased tickets (valid + used)
+3. Active ticket offers (not expired)
+
+From `convex/events.ts:68-108`:
+
+```typescript
+async function checkAvailability(ctx: QueryCtx, eventId: Id<"events">) {
+  const event = await ctx.db.get(eventId);
+  if (!event) throw new Error("Event not found");
+
+  // Count total purchased tickets
+  const purchasedCount = await ctx.db
+    .query("tickets")
+    .withIndex("by_event", (q) => q.eq("eventId", eventId))
+    .collect()
+    .then(
+      (tickets) =>
+        tickets.filter(
+          (t) =>
+            t.status === TICKET_STATUS.VALID || t.status === TICKET_STATUS.USED
+        ).length
+    );
+
+  // Count current valid offers
+  const now = Date.now();
+  const activeOffers = await ctx.db
+    .query("waitingList")
+    .withIndex("by_event_status", (q) =>
+      q
+        .eq("eventId", eventId)
+        .eq("status", WAITING_LIST_STATUS.OFFERED ?? "offered")
+    )
+    .collect()
+    .then(
+      (entries) => entries.filter((e) => (e.offerExpiresAt ?? 0) > now).length
+    );
+
+  const availableSpots = event.totalTickets - (purchasedCount + activeOffers);
+
+  return {
+    available: availableSpots > 0,
+    availableSpots,
+    totalTickets: event.totalTickets,
+    purchasedCount,
+    activeOffers,
+  };
+}
+```
+
+## User Queries
+
+### Get User's Waiting List Entries
+
+From `convex/events.ts:302-322`:
+
+```typescript
+export const getUserWaitingList = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    const entries = await ctx.db
+      .query("waitingList")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+
+    const entriesWithEvents = await Promise.all(
+      entries.map(async (entry) => {
+        const event = await ctx.db.get(entry.eventId);
+        return {
+          ...entry,
+          event,
+        };
+      })
+    );
+
+    return entriesWithEvents;
+  },
+});
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Ticket Purchasing" icon="credit-card" href="/features/ticket-purchasing">
+    Complete the purchase flow
+  </Card>
+  <Card title="Event Management" icon="calendar" href="/features/event-management">
+    Learn about event capacity management
+  </Card>
+</CardGroup>

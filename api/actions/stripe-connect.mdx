@@ -1,0 +1,287 @@
+---
+title: "Stripe Connect Actions"
+description: "Manage Stripe Connect accounts for event organizers"
+---
+
+## Overview
+
+These actions handle Stripe Connect account management for event organizers, including account creation, onboarding, login, and status checking.
+
+## createStripeConnectCustomer
+
+Creates a new Stripe Connect Express account for the authenticated user or returns an existing account ID.
+
+### Authentication
+
+Requires Clerk authentication:
+
+```typescript
+const { userId } = await auth();
+if (!userId) throw new Error("Not authenticated");
+```
+
+### Function Signature
+
+```typescript
+export async function createStripeConnectCustomer(): Promise<{
+  account: string;
+}>
+```
+
+### Return Value
+
+<ResponseField name="account" type="string">
+  The Stripe Connect account ID (either existing or newly created)
+</ResponseField>
+
+### Workflow
+
+1. **Authentication**: Verifies user is authenticated via Clerk
+2. **Check Existing Account**: Queries Convex database for existing Stripe Connect ID
+3. **Return if Exists**: If account exists, returns the existing account ID
+4. **Create New Account**: If no account exists, creates a new Stripe Express account with:
+   - Account type: `express`
+   - Card payment capability
+   - Transfer capability
+5. **Store Account ID**: Updates Convex database with the new Stripe Connect ID
+6. **Return Account ID**: Returns the newly created account ID
+
+### Stripe Account Configuration
+
+```typescript
+const account = await stripe.accounts.create({
+  type: "express",
+  capabilities: {
+    card_payments: { requested: true },
+    transfers: { requested: true },
+  },
+});
+```
+
+### Example Usage
+
+```typescript
+try {
+  const { account } = await createStripeConnectCustomer();
+  console.log("Stripe Connect Account ID:", account);
+} catch (error) {
+  console.error("Failed to create Stripe Connect account:", error);
+}
+```
+
+---
+
+## createStripeConnectAccountLink
+
+Generates a Stripe account link URL for onboarding a Connect account. This link allows users to complete their Stripe Express account setup.
+
+### Function Signature
+
+```typescript
+export async function createStripeConnectAccountLink(
+  account: string
+): Promise<{ url: string }>
+```
+
+### Parameters
+
+<ParamField path="account" type="string" required>
+  The Stripe Connect account ID for which to create an onboarding link
+</ParamField>
+
+### Return Value
+
+<ResponseField name="url" type="string">
+  The URL to redirect the user to for completing Stripe Connect onboarding
+</ResponseField>
+
+### Account Link Configuration
+
+The action creates an account link with automatic URL generation based on the request origin:
+
+```typescript
+const accountLink = await stripe.accountLinks.create({
+  account,
+  refresh_url: `${origin}/connect/refresh/${account}`,
+  return_url: `${origin}/connect/return/${account}`,
+  type: "account_onboarding",
+});
+```
+
+### URL Parameters
+
+- **refresh_url**: Where to redirect if the link expires or fails
+- **return_url**: Where to redirect after successful onboarding
+- **type**: Set to `account_onboarding` for initial setup
+
+### Error Handling
+
+Catches and re-throws Stripe API errors with appropriate error messages:
+
+```typescript
+catch (error) {
+  console.error(
+    "An error occurred when calling the Stripe API to create an account link:",
+    error
+  );
+  if (error instanceof Error) {
+    throw new Error(error.message);
+  }
+  throw new Error("An unknown error occurred");
+}
+```
+
+### Example Usage
+
+```typescript
+try {
+  const { url } = await createStripeConnectAccountLink(
+    "acct_1234567890abcdef"
+  );
+  
+  // Redirect user to Stripe onboarding
+  window.location.href = url;
+} catch (error) {
+  console.error("Failed to create account link:", error);
+}
+```
+
+---
+
+## createStripeConnectLoginLink
+
+Generates a login link for an existing Stripe Connect account. This allows account holders to access their Stripe Express dashboard.
+
+### Function Signature
+
+```typescript
+export async function createStripeConnectLoginLink(
+  stripeAccountId: string
+): Promise<string>
+```
+
+### Parameters
+
+<ParamField path="stripeAccountId" type="string" required>
+  The Stripe Connect account ID for which to generate a login link
+</ParamField>
+
+### Return Value
+
+Returns the login URL as a string directly (not wrapped in an object).
+
+### Stripe API Usage
+
+```typescript
+const loginLink = await stripe.accounts.createLoginLink(stripeAccountId);
+return loginLink.url;
+```
+
+### Error Handling
+
+Validates input and handles Stripe API errors:
+
+```typescript
+if (!stripeAccountId) {
+  throw new Error("No Stripe account ID provided");
+}
+
+try {
+  const loginLink = await stripe.accounts.createLoginLink(stripeAccountId);
+  return loginLink.url;
+} catch (error) {
+  console.error("Error creating Stripe Connect login link:", error);
+  throw new Error("Failed to create Stripe Connect login link");
+}
+```
+
+### Example Usage
+
+```typescript
+try {
+  const loginUrl = await createStripeConnectLoginLink(
+    "acct_1234567890abcdef"
+  );
+  
+  // Open Stripe dashboard in new tab
+  window.open(loginUrl, "_blank");
+} catch (error) {
+  console.error("Failed to create login link:", error);
+}
+```
+
+---
+
+## getStripeConnectAccount
+
+Retrieves the Stripe Connect account ID for the currently authenticated user.
+
+### Authentication
+
+Requires Clerk authentication:
+
+```typescript
+const { userId } = await auth();
+if (!userId) throw new Error("Not authenticated");
+```
+
+### Function Signature
+
+```typescript
+export async function getStripeConnectAccount(): Promise<{
+  stripeConnectId: string | null;
+}>
+```
+
+### Return Value
+
+<ResponseField name="stripeConnectId" type="string | null">
+  The Stripe Connect account ID for the user, or null if no account exists
+</ResponseField>
+
+### Example Usage
+
+```typescript
+try {
+  const { stripeConnectId } = await getStripeConnectAccount();
+  
+  if (stripeConnectId) {
+    console.log("User has Stripe Connect account:", stripeConnectId);
+  } else {
+    console.log("User needs to set up Stripe Connect");
+  }
+} catch (error) {
+  console.error("Failed to get Stripe Connect account:", error);
+}
+```
+
+---
+
+## Complete Onboarding Flow
+
+Here's a typical flow for setting up a new event organizer with Stripe Connect:
+
+```typescript
+// Step 1: Check if user has an account
+const { stripeConnectId } = await getStripeConnectAccount();
+
+if (!stripeConnectId) {
+  // Step 2: Create new account if needed
+  const { account } = await createStripeConnectCustomer();
+  
+  // Step 3: Generate onboarding link
+  const { url } = await createStripeConnectAccountLink(account);
+  
+  // Step 4: Redirect to Stripe onboarding
+  window.location.href = url;
+} else {
+  // User already has an account, generate login link
+  const loginUrl = await createStripeConnectLoginLink(stripeConnectId);
+  window.open(loginUrl, "_blank");
+}
+```
+
+### Related Actions
+
+- [Stripe Checkout Session](/api/actions/stripe-checkout) - Creating payment sessions
+- [Refunds](/api/actions/refunds) - Processing ticket refunds

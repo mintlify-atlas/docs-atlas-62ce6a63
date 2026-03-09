@@ -1,0 +1,171 @@
+---
+title: 'Update Ticket Status'
+description: 'Update the status of an existing ticket'
+---
+
+## Endpoint
+
+```typescript
+tickets.updateTicketStatus
+```
+
+## Description
+
+Updates the status of a ticket. This mutation is typically used for ticket scanning at events (marking as "used"), processing refunds (marking as "refunded"), or cancelling tickets (marking as "cancelled").
+
+**Source:** `convex/tickets.ts:50-63`
+
+## Parameters
+
+<ParamField path="ticketId" type="Id<'tickets'>" required>
+  The unique identifier of the ticket to update
+</ParamField>
+
+<ParamField path="status" type="enum" required>
+  The new status for the ticket. Must be one of:
+  - `"valid"` - Ticket is active and unused
+  - `"used"` - Ticket has been scanned/used for event entry
+  - `"refunded"` - Ticket has been refunded
+  - `"cancelled"` - Ticket has been cancelled
+</ParamField>
+
+## Ticket Status Enum
+
+The status parameter accepts exactly four values:
+
+```typescript
+type TicketStatus = "valid" | "used" | "refunded" | "cancelled";
+```
+
+### Status Meanings
+
+- **valid**: Default status when a ticket is purchased. Indicates the ticket can be used for event entry.
+- **used**: Ticket has been scanned at the event entrance. Prevents duplicate entry.
+- **refunded**: Ticket has been refunded to the purchaser. Cannot be used for entry.
+- **cancelled**: Ticket has been cancelled. Cannot be used for entry.
+
+## Response
+
+The mutation does not return a value. It updates the ticket status in the database.
+
+## Example
+
+```typescript
+import { useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
+
+function TicketScanner() {
+  const updateStatus = useMutation(api.tickets.updateTicketStatus);
+  
+  const markAsUsed = async (ticketId: Id<"tickets">) => {
+    await updateStatus({
+      ticketId,
+      status: "used",
+    });
+    console.log("Ticket marked as used");
+  };
+  
+  const refundTicket = async (ticketId: Id<"tickets">) => {
+    await updateStatus({
+      ticketId,
+      status: "refunded",
+    });
+    console.log("Ticket refunded");
+  };
+  
+  return (
+    <div>
+      <button onClick={() => markAsUsed("jx7abc123def" as Id<"tickets">)}>
+        Scan Ticket
+      </button>
+      <button onClick={() => refundTicket("jx7abc123def" as Id<"tickets">)}>
+        Process Refund
+      </button>
+    </div>
+  );
+}
+```
+
+## Common Use Cases
+
+### Event Entry Scanning
+
+When a ticket is scanned at event entrance:
+
+```typescript
+await updateTicketStatus({
+  ticketId: scannedTicketId,
+  status: "used",
+});
+```
+
+### Processing Refunds
+
+When issuing a refund to a customer:
+
+```typescript
+// First process Stripe refund
+const refund = await stripe.refunds.create({
+  payment_intent: ticket.paymentIntentId,
+});
+
+// Then update ticket status
+await updateTicketStatus({
+  ticketId,
+  status: "refunded",
+});
+```
+
+### Cancelling Tickets
+
+When a user cancels before an event:
+
+```typescript
+await updateTicketStatus({
+  ticketId,
+  status: "cancelled",
+});
+```
+
+### Reactivating a Ticket
+
+If needed, a ticket can be reactivated:
+
+```typescript
+await updateTicketStatus({
+  ticketId,
+  status: "valid",
+});
+```
+
+## Status Flow
+
+Typical ticket lifecycle:
+
+```
+purchased → valid → used
+             ↓
+          refunded
+             ↓
+         cancelled
+```
+
+## Integration with Event Availability
+
+Only tickets with "valid" or "used" status count toward event capacity. Refunded and cancelled tickets free up space for other attendees.
+
+From `convex/events.ts:331-342`:
+
+```typescript
+const purchasedCount = tickets.filter(
+  (t) => t.status === "valid" || t.status === "used"
+).length;
+```
+
+## Security Considerations
+
+- Implement proper authorization checks before calling this mutation
+- Event organizers should only be able to mark their own event tickets as "used"
+- Users should only be able to request refunds for their own tickets
+- Consider adding audit logging for status changes

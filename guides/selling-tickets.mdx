@@ -1,0 +1,491 @@
+---
+title: Selling Tickets
+description: Complete guide for event organizers to set up payments, create events, and manage ticket sales
+---
+
+Learn how to become a seller on Ticket Hub, set up payment processing, and start selling tickets for your events.
+
+## Getting Started as a Seller
+
+To sell tickets on Ticket Hub, you need:
+
+1. A Ticket Hub account
+2. Stripe Connect account (for payment processing)
+3. Event details ready to publish
+
+<Note>
+  Even free events (£0 tickets) benefit from the platform's queue management and attendance tracking.
+</Note>
+
+## Setting Up Stripe Connect
+
+Stripe Connect enables you to receive payments directly from ticket sales.
+
+<Steps>
+  <Step title="Navigate to Seller Dashboard">
+    Access your seller dashboard:
+    - Click **Sell Tickets** or **Become a Seller**
+    - Navigate to `/seller` or similar route
+  </Step>
+
+  <Step title="Create Stripe Connect Account">
+    Click **Set Up Stripe Connect**:
+
+    The system checks if you already have an account:
+    - If yes: Uses existing Stripe Connect ID
+    - If no: Creates a new Express account
+
+    **Account Creation Process:**
+    ```typescript
+    // System creates Express account with:
+    - Card payment capability
+    - Transfer capability (to receive funds)
+    - Automatic setup
+    ```
+
+    Your Stripe Connect ID is saved to your user profile.
+  </Step>
+
+  <Step title="Complete Stripe Onboarding">
+    You're redirected to Stripe's onboarding flow:
+
+    **Required Information:**
+    - Business or individual details
+    - Bank account for payouts
+    - Tax information
+    - Identity verification
+
+    **URLs during onboarding:**
+    - Refresh URL: `/connect/refresh/{accountId}` (if issues occur)
+    - Return URL: `/connect/return/{accountId}` (after completion)
+
+    <Info>
+      Stripe Express accounts are designed for platforms. Setup is streamlined and takes about 5-10 minutes.
+    </Info>
+  </Step>
+
+  <Step title="Verify Account Status">
+    After onboarding:
+
+    - Your account status is checked
+    - Must have charges enabled
+    - Must have payouts enabled
+    - Complete any pending requirements
+
+    Once verified, you can start creating paid events!
+  </Step>
+</Steps>
+
+## Creating Your First Event
+
+Once Stripe is set up, create an event:
+
+<Steps>
+  <Step title="Access Event Creation">
+    From your seller dashboard, click **Create Event**.
+
+    See the complete guide: [Creating Events](/guides/creating-events)
+  </Step>
+
+  <Step title="Set Your Pricing">
+    Define ticket pricing:
+
+    **Free Events (£0):**
+    - No payment processing
+    - Still manage capacity and waiting list
+    - Track attendance
+
+    **Paid Events:**
+    - Set price in GBP
+    - Platform fee: 1% of ticket price
+    - You receive: 99% of ticket price
+
+    **Pricing Example:**
+    - Ticket price: £100
+    - Platform fee: £1 (1%)
+    - You receive: £99
+    - Buyer pays: £100
+  </Step>
+
+  <Step title="Configure Capacity">
+    Set the total number of tickets:
+
+    - Minimum: 1 ticket
+    - Maximum: Based on your venue/event
+
+    The system automatically:
+    - Tracks sales in real-time
+    - Manages the waiting list
+    - Prevents overselling
+    - Processes queue for next buyers
+  </Step>
+
+  <Step title="Publish Your Event">
+    Click **Create Event** to publish:
+
+    - Event goes live immediately
+    - Appears in search and listings
+    - Accessible via unique URL
+    - Ready for ticket sales
+  </Step>
+</Steps>
+
+## Monitoring Sales
+
+Track your event performance in real-time:
+
+### Seller Dashboard
+
+View all your events with metrics:
+
+```typescript
+// Metrics for each event:
+{
+  soldTickets: number        // Valid + used tickets
+  refundedTickets: number    // Refunded count
+  cancelledTickets: number   // Cancelled count
+  revenue: number            // Total revenue (soldTickets × price)
+}
+```
+
+### Event-Level Insights
+
+<CardGroup cols={2}>
+  <Card title="Ticket Sales" icon="ticket">
+    **Track:**
+    - Total sold
+    - Valid tickets
+    - Used tickets (scanned)
+    - Refunded tickets
+  </Card>
+
+  <Card title="Revenue" icon="sterling-sign">
+    **Calculate:**
+    - Gross revenue
+    - Platform fees (1%)
+    - Net revenue (99%)
+    - Refund impact
+  </Card>
+
+  <Card title="Availability" icon="chart-pie">
+    **Monitor:**
+    - Tickets remaining
+    - Active offers
+    - Waiting list size
+    - Sold out status
+  </Card>
+
+  <Card title="Capacity" icon="users">
+    **Manage:**
+    - Total capacity
+    - Purchased count
+    - Reserved (active offers)
+    - Available spots
+  </Card>
+</CardGroup>
+
+### Real-Time Updates
+
+The platform provides live data:
+
+**Availability Calculation:**
+```typescript
+availableSpots = totalTickets - (purchasedCount + activeOffers)
+
+where:
+- purchasedCount = valid + used tickets
+- activeOffers = offers not expired
+- availableSpots = tickets ready to sell
+```
+
+**Sold Out Detection:**
+```typescript
+isSoldOut = (purchasedCount + activeOffers) >= totalTickets
+```
+
+## Managing Events
+
+### Editing Events
+
+<Steps>
+  <Step title="Access Edit Mode">
+    From your event page, click **Edit Event**.
+  </Step>
+
+  <Step title="Update Details">
+    You can change:
+    - Event name and description
+    - Location and date
+    - Ticket price (affects future sales only)
+    - Capacity (with restrictions)
+    - Event image
+
+    <Warning>
+      **Capacity Restrictions:** You cannot reduce total tickets below the number already sold.
+      
+      Example: If you've sold 50 tickets, the minimum capacity is 50.
+    </Warning>
+  </Step>
+
+  <Step title="Save Changes">
+    Click **Update Event** to apply changes.
+
+    Updated information is visible immediately to potential buyers.
+  </Step>
+</Steps>
+
+### Cancelling Events
+
+<Warning>
+  Cancelling an event is a serious action. You must refund all tickets first.
+</Warning>
+
+<Steps>
+  <Step title="Refund All Tickets">
+    Before cancelling:
+    1. Process refunds for all ticket holders
+    2. Ensure no valid or used tickets remain
+    3. See [Managing Refunds](/guides/managing-refunds)
+  </Step>
+
+  <Step title="Cancel the Event">
+    Once all tickets are refunded:
+
+    - Navigate to event settings
+    - Click **Cancel Event**
+    - Confirm cancellation
+
+    **What happens:**
+    - Event is marked as cancelled
+    - Removed from public listings
+    - All waiting list entries deleted
+    - Event page shows "Cancelled" status
+  </Step>
+</Steps>
+
+## Accessing Your Revenue
+
+### Payout Schedule
+
+Payouts are handled by Stripe:
+
+- **Default schedule:** Daily automatic payouts
+- **Processing time:** 2-7 business days to bank account
+- **Currency:** GBP (British Pounds)
+
+### Viewing Payout Details
+
+Access your Stripe Dashboard:
+
+<Steps>
+  <Step title="Create Login Link">
+    From your seller dashboard, click **Access Stripe Dashboard** or similar link.
+
+    The system generates a secure login link:
+    ```typescript
+    // Creates Stripe Express dashboard login link
+    // Valid for a limited time
+    // Redirects to your Stripe account
+    ```
+  </Step>
+
+  <Step title="Review Financials">
+    In Stripe Dashboard, you can:
+
+    - View all transactions
+    - Track payout schedule
+    - Download financial reports
+    - Manage bank account details
+    - Update business information
+  </Step>
+</Steps>
+
+### Revenue Calculation
+
+**Per Ticket:**
+```
+Ticket Price: £100
+Platform Fee: £1 (1%)
+Your Revenue: £99
+```
+
+**Per Event:**
+```
+Tickets Sold: 100
+Ticket Price: £50
+Gross Revenue: £5,000
+Platform Fees: £50 (1%)
+Your Revenue: £4,950
+```
+
+**After Refunds:**
+```
+Original Revenue: £4,950
+Refunded Tickets: 5
+Refund Amount: £250 (5 × £50)
+Final Revenue: £4,700
+```
+
+## Payment Processing
+
+### How Payments Work
+
+<Steps>
+  <Step title="Buyer Purchases Ticket">
+    When a buyer completes checkout:
+
+    1. Stripe processes payment
+    2. Payment intent created
+    3. Funds held by Stripe
+    4. Ticket created in database
+  </Step>
+
+  <Step title="Platform Fee Deducted">
+    Stripe automatically:
+
+    - Calculates 1% platform fee
+    - Deducts from transaction
+    - Allocates to platform account
+
+    **Fee Calculation:**
+    ```typescript
+    application_fee_amount = Math.round(event.price * 100 * 0.01)
+    // Price converted to cents, then 1% applied
+    ```
+  </Step>
+
+  <Step title="Payout to Your Account">
+    On payout schedule:
+
+    - Stripe transfers your portion (99%)
+    - Sent to your bank account
+    - Minus Stripe's processing fees
+    - Available in 2-7 business days
+  </Step>
+</Steps>
+
+### Checkout Session Details
+
+When buyers purchase:
+
+```typescript
+// Stripe Checkout session includes:
+{
+  payment_method_types: ["card"],
+  line_items: [
+    {
+      price_data: {
+        currency: "gbp",
+        product_data: {
+          name: "Event Name",
+          description: "Event Description"
+        },
+        unit_amount: price * 100  // In pence
+      },
+      quantity: 1
+    }
+  ],
+  payment_intent_data: {
+    application_fee_amount: price * 100 * 0.01  // 1% fee
+  },
+  expires_at: now + 30 minutes,  // Matches ticket offer
+  mode: "payment",
+  success_url: "/tickets/purchase-success",
+  cancel_url: "/event/{eventId}"
+}
+```
+
+## Best Practices for Sellers
+
+<CardGroup cols={2}>
+  <Card title="Complete Stripe Setup Early" icon="bolt">
+    Set up your Stripe Connect account before creating events. This ensures smooth payment processing from day one.
+  </Card>
+
+  <Card title="Set Realistic Capacity" icon="gauge">
+    Don't overcommit on tickets. Consider venue size, staffing, and resources. You can always increase capacity later.
+  </Card>
+
+  <Card title="Monitor Your Events" icon="chart-line">
+    Check your seller dashboard regularly to track sales, manage capacity, and respond to demand.
+  </Card>
+
+  <Card title="Respond to Waiting Lists" icon="clock">
+    If you have a large waiting list, consider increasing capacity or creating additional event dates.
+  </Card>
+
+  <Card title="Plan for Refunds" icon="shield">
+    Set clear refund policies and be prepared to handle refund requests professionally.
+  </Card>
+
+  <Card title="Keep Events Updated" icon="refresh">
+    Update event details if anything changes. Clear communication builds trust with ticket buyers.
+  </Card>
+</CardGroup>
+
+## Seller Restrictions and Rules
+
+### What You Can't Do
+
+<Warning>
+  **Capacity Limits:** Once tickets are sold, you cannot reduce capacity below that number.
+</Warning>
+
+<Warning>
+  **Cancel with Active Tickets:** You must refund all tickets before cancelling an event.
+</Warning>
+
+### Data You Cannot Access
+
+- Individual buyer payment details (handled by Stripe)
+- Buyer card numbers or CVV codes
+- Detailed financial data (available in Stripe Dashboard)
+
+### Platform Responsibilities
+
+Ticket Hub handles:
+- Queue management
+- Ticket offer expiration
+- Waiting list processing
+- Payment routing
+- Refund processing (when requested)
+
+## Common Seller Questions
+
+<AccordionGroup>
+  <Accordion title="How long does Stripe setup take?">
+    Stripe Express onboarding typically takes 5-10 minutes. However, additional verification may be required, which can take 1-2 business days.
+  </Accordion>
+
+  <Accordion title="Can I change the platform fee?">
+    No, the platform fee is fixed at 1% of the ticket price. This fee covers queue management, storage, and infrastructure.
+  </Accordion>
+
+  <Accordion title="What if I want to offer discounts?">
+    You can update your event's ticket price at any time. The new price applies to future purchases only. Consider creating multiple events for different pricing tiers.
+  </Accordion>
+
+  <Accordion title="How do I handle group bookings?">
+    Currently, each ticket is sold individually through the waiting list. For group bookings, have each person join the waiting list and purchase their own ticket.
+  </Accordion>
+
+  <Accordion title="Can I export my sales data?">
+    Sales data is available in your Stripe Dashboard. You can export transaction reports, payout summaries, and other financial data.
+  </Accordion>
+
+  <Accordion title="What happens if a buyer requests a refund?">
+    You process refunds through the platform. See [Managing Refunds](/guides/managing-refunds) for the complete process. Refunded amounts are deducted from your next payout.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Create Your Event" icon="plus" href="/guides/creating-events">
+    Ready to sell? Create your first event
+  </Card>
+
+  <Card title="Manage Refunds" icon="rotate-left" href="/guides/managing-refunds">
+    Learn how to handle refund requests
+  </Card>
+</CardGroup>

@@ -1,0 +1,588 @@
+---
+title: Key Features
+description: Explore the powerful features that make Ticket Hub the ideal platform for event ticketing and management
+---
+
+Ticket Hub is a full-featured event ticketing platform built with modern web technologies. Here's what makes it powerful:
+
+<CardGroup cols={2}>
+  <Card title="Smart Waiting List System" icon="clock">
+    Automatically manages ticket availability with time-limited offers and queue processing
+  </Card>
+  
+  <Card title="Stripe Connect Integration" icon="credit-card">
+    Seamless payment processing with direct payouts to event organizers
+  </Card>
+  
+  <Card title="Real-time Event Search" icon="search">
+    Fast, client-side search across event names, descriptions, and locations
+  </Card>
+  
+  <Card title="Automated Refund System" icon="rotate-left">
+    One-click refunds for all tickets when events are cancelled
+  </Card>
+  
+  <Card title="Rate Limiting Protection" icon="shield-halved">
+    Built-in rate limiting prevents abuse of the waiting list system
+  </Card>
+  
+  <Card title="Clerk Authentication" icon="lock">
+    Secure user authentication with support for multiple sign-in methods
+  </Card>
+  
+  <Card title="Seller Dashboard" icon="chart-line">
+    Comprehensive analytics and management tools for event organizers
+  </Card>
+  
+  <Card title="Automated Cleanup Jobs" icon="broom">
+    Background cron jobs ensure data consistency and expire old offers
+  </Card>
+</CardGroup>
+
+---
+
+## Smart Waiting List System
+
+The waiting list system is the core feature of Ticket Hub. When tickets sell out, users can join a queue and receive time-limited offers when tickets become available.
+
+### How It Works
+
+<Steps>
+  <Step title="User joins waiting list">
+    When a user attempts to join the waiting list, the system checks ticket availability:
+    
+    ```typescript
+    // From convex/events.ts:145-156
+    const { available } = await checkAvailability(ctx, eventId);
+    
+    if (available) {
+      // If tickets are available, create an offer entry
+      const waitingListId = await ctx.db.insert("waitingList", {
+        eventId,
+        userId,
+        status: WAITING_LIST_STATUS.OFFERED,
+        offerExpiresAt: now + DURATIONS.TICKET_OFFER, // 30 minutes
+      });
+    }
+    ```
+  </Step>
+  
+  <Step title="Offer expires or ticket purchased">
+    Each offer has a 30-minute expiration window. If the user doesn't purchase, the offer automatically expires:
+    
+    ```typescript
+    // From convex/waiting_list.ts:173-187
+    export const expireOffer = internalMutation({
+      args: {
+        waitingListId: v.id("waitingList"),
+        eventId: v.id("events"),
+      },
+      handler: async (ctx, { waitingListId, eventId }) => {
+        const offer = await ctx.db.get(waitingListId);
+        if (!offer || offer.status !== WAITING_LIST_STATUS.OFFERED) return;
+        
+        await ctx.db.patch(waitingListId, {
+          status: WAITING_LIST_STATUS.EXPIRED,
+        });
+        
+        await processQueueX(ctx, eventId);
+      },
+    });
+    ```
+  </Step>
+  
+  <Step title="Next person in queue gets offer">
+    When a ticket becomes available, the system automatically processes the queue:
+    
+    ```typescript
+    // From convex/waiting_list.ts:131-148
+    const waitingUsers = await ctx.db
+      .query("waitingList")
+      .withIndex("by_event_status", (q) =>
+        q.eq("eventId", eventId).eq("status", WAITING_LIST_STATUS.WAITING)
+      )
+      .order("asc")
+      .take(availableSpots);
+    
+    for (const user of waitingUsers) {
+      await ctx.db.patch(user._id, {
+        status: WAITING_LIST_STATUS.OFFERED,
+        offerExpiresAt: now + DURATIONS.TICKET_OFFER,
+      });
+      
+      await ctx.scheduler.runAfter(
+        DURATIONS.TICKET_OFFER,
+        internal.waiting_list.expireOffer,
+        { waitingListId: user._id, eventId }
+      );
+    }
+    ```
+  </Step>
+</Steps>
+
+<Info>
+  The 30-minute offer window is enforced both in the application and at the Stripe checkout level to ensure users have enough time to complete their purchase.
+</Info>
+
+### Queue Position Tracking
+
+Users can see their real-time position in the queue:
+
+```typescript
+// From convex/waiting_list.ts:37-76
+export const getQueuePosition = query({
+  args: {
+    eventId: v.id("events"),
+    userId: v.string(),
+  },
+  handler: async (ctx, { eventId, userId }) => {
+    const entry = await ctx.db
+      .query("waitingList")
+      .withIndex("by_user_event", (q) =>
+        q.eq("userId", userId).eq("eventId", eventId)
+      )
+      .first();
+    
+    if (!entry) return null;
+    
+    // Count people ahead in line
+    const peopleAhead = await ctx.db
+      .query("waitingList")
+      .withIndex("by_event_status", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.and(
+          q.lt(q.field("_creationTime"), entry._creationTime),
+          q.or(
+            q.eq(q.field("status"), "waiting"),
+            q.eq(q.field("status"), "offered")
+          )
+        )
+      )
+      .collect()
+      .then((entries) => entries.length);
+    
+    return {
+      ...entry,
+      position: peopleAhead + 1,
+    };
+  },
+});
+```
+
+---
+
+## Stripe Connect Integration
+
+Ticket Hub uses Stripe Connect to enable event organizers to receive payments directly to their own Stripe accounts, with a 1% platform fee.
+
+### Account Setup Flow
+
+Event organizers go through a streamlined onboarding process:
+
+<Steps>
+  <Step title="Create Stripe Express account">
+    ```typescript
+    // From src/actions/create-stripe-connect-customer.ts:41-47
+    const account = await stripe.accounts.create({
+      type: "express",
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
+      },
+    });
+    ```
+  </Step>
+  
+  <Step title="Complete account requirements">
+    Users provide required information through Stripe's hosted onboarding:
+    
+    ```typescript
+    // From src/actions/create-stripe-account-link.ts
+    const accountLink = await stripe.accountLinks.create({
+      account: stripeConnectId,
+      refresh_url: `${baseUrl}/connect/refresh/${stripeConnectId}`,
+      return_url: `${baseUrl}/connect/return/${stripeConnectId}`,
+      type: "account_onboarding",
+    });
+    ```
+  </Step>
+  
+  <Step title="Start accepting payments">
+    Once approved, organizers can create events and accept payments with automatic platform fees.
+  </Step>
+</Steps>
+
+### Payment Processing
+
+When a user purchases a ticket, the payment is split automatically:
+
+```typescript
+// From src/actions/create-stripe-checkout-session.ts:65-93
+const session = await stripe.checkout.sessions.create(
+  {
+    payment_method_types: ["card"],
+    line_items: [
+      {
+        price_data: {
+          currency: "gbp",
+          product_data: {
+            name: event.name,
+            description: event.description,
+          },
+          unit_amount: Math.round(event.price * 100),
+        },
+        quantity: 1,
+      },
+    ],
+    payment_intent_data: {
+      application_fee_amount: Math.round(event.price * 100 * 0.01), // 1% fee
+    },
+    expires_at: Math.floor(Date.now() / 1000) + DURATIONS.TICKET_OFFER / 1000,
+    mode: "payment",
+    success_url: `${baseUrl}/tickets/purchase-success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${baseUrl}/event/${eventId}`,
+    metadata,
+  },
+  {
+    stripeAccount: stripeConnectId,
+  }
+);
+```
+
+<Tip>
+  The 1% platform fee is automatically deducted by Stripe. Event organizers receive 99% of the ticket price directly to their connected account.
+</Tip>
+
+---
+
+## Real-time Event Search
+
+The search functionality filters events by name, description, and location in real-time:
+
+```typescript
+// From convex/events.ts:370-387
+export const search = query({
+  args: { searchTerm: v.string() },
+  handler: async (ctx, { searchTerm }) => {
+    const events = await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("is_cancelled"), undefined))
+      .collect();
+    
+    return events.filter((event) => {
+      const searchTermLower = searchTerm.toLowerCase();
+      return (
+        event.name.toLowerCase().includes(searchTermLower) ||
+        event.description.toLowerCase().includes(searchTermLower) ||
+        event.location.toLowerCase().includes(searchTermLower)
+      );
+    });
+  },
+});
+```
+
+### Search Component
+
+The search bar provides a clean user interface:
+
+```tsx
+// From src/components/search-bar.tsx:4-24
+export default function SearchBar() {
+  return (
+    <div className="w-full max-w-4xl mx-auto">
+      <Form action="/search" className="relative">
+        <input
+          type="text"
+          name="q"
+          placeholder="Search for events..."
+          className="w-full py-2 px-4 pl-12 bg-white rounded-lg border border-gray-200 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
+        <button
+          type="submit"
+          className="absolute cursor-pointer right-3 top-1/2 -translate-y-1/2 bg-blue-600 text-white px-4 py-1 rounded-lg text-sm font-medium hover:bg-blue-700"
+        >
+          Search
+        </button>
+      </Form>
+    </div>
+  );
+}
+```
+
+---
+
+## Automated Refund System
+
+When an event is cancelled, the system automatically processes refunds for all valid tickets:
+
+```typescript
+// From src/actions/refund-event-ticket.ts:34-64
+const results = await Promise.allSettled(
+  tickets.map(async (ticket) => {
+    try {
+      if (!ticket.paymentIntentId) {
+        throw new Error("Payment information not found");
+      }
+      
+      // Issue refund through Stripe
+      await stripe.refunds.create(
+        {
+          payment_intent: ticket.paymentIntentId,
+          reason: "requested_by_customer",
+        },
+        {
+          stripeAccount: stripeConnectId,
+        }
+      );
+      
+      // Update ticket status to refunded
+      await convex.mutation(api.tickets.updateTicketStatus, {
+        ticketId: ticket._id,
+        status: "refunded",
+      });
+      
+      return { success: true, ticketId: ticket._id };
+    } catch (error) {
+      console.error(`Failed to refund ticket ${ticket._id}:`, error);
+      return { success: false, ticketId: ticket._id, error };
+    }
+  })
+);
+```
+
+<Warning>
+  Event organizers cannot cancel events that have active tickets. All tickets must be refunded first to protect buyers.
+</Warning>
+
+---
+
+## Rate Limiting Protection
+
+The system prevents abuse by limiting how often users can join waiting lists:
+
+```typescript
+// From convex/events.ts:17-24
+const rateLimiter = new RateLimiter(components.rateLimiter, {
+  queueJoin: {
+    kind: "fixed window",
+    rate: 3, // 3 joins allowed
+    period: 30 * MINUTE, // in 30 minutes
+  },
+});
+```
+
+When a user tries to join too many waiting lists:
+
+```typescript
+// From convex/events.ts:116-123
+const status = await rateLimiter.limit(ctx, "queueJoin", { key: userId });
+if (!status.ok) {
+  throw new ConvexError(
+    `You've joined the waiting list too many times. Please wait ${Math.ceil(
+      status.retryAfter / (60 * 1000)
+    )} minutes before trying again.`
+  );
+}
+```
+
+<Info>
+  Rate limiting is applied per user and tracks joins across all events to prevent system abuse.
+</Info>
+
+---
+
+## Clerk Authentication
+
+Ticket Hub uses Clerk for secure, flexible authentication:
+
+```typescript
+// From convex/auth.config.ts:2-9
+export default {
+  providers: [
+    {
+      domain: "https://eminent-rooster-80.clerk.accounts.dev",
+      applicationID: "convex",
+    },
+  ],
+};
+```
+
+Authentication is required for all ticket purchases and event management:
+
+```typescript
+// From src/actions/create-stripe-checkout-session.ts:24-25
+const { userId } = await auth();
+if (!userId) throw new Error("Not authenticated");
+```
+
+---
+
+## Seller Dashboard
+
+Event organizers get a comprehensive dashboard with:
+
+- **Account status monitoring** - Real-time Stripe Connect account status
+- **Payment capability checks** - Verification of charge and payout abilities
+- **Event metrics** - Track sold, refunded, and cancelled tickets
+- **Revenue tracking** - View earnings per event
+
+```typescript
+// From convex/events.ts:399-424
+const eventsWithMetrics = await Promise.all(
+  events.map(async (event) => {
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", event._id))
+      .collect();
+    
+    const validTickets = tickets.filter(
+      (t) => t.status === "valid" || t.status === "used"
+    );
+    const refundedTickets = tickets.filter((t) => t.status === "refunded");
+    const cancelledTickets = tickets.filter((t) => t.status === "cancelled");
+    
+    const metrics: Metrics = {
+      soldTickets: validTickets.length,
+      refundedTickets: refundedTickets.length,
+      cancelledTickets: cancelledTickets.length,
+      revenue: validTickets.length * event.price,
+    };
+    
+    return {
+      ...event,
+      metrics,
+    };
+  })
+);
+```
+
+---
+
+## Automated Cleanup Jobs
+
+A cron job runs every minute to clean up expired offers and maintain data consistency:
+
+```typescript
+// From convex/crons.ts:7-11
+crons.interval(
+  "cleanup-expired-offers",
+  { minutes: 1 },
+  internal.waiting_list.cleanupExpiredOffers
+);
+```
+
+The cleanup process:
+
+```typescript
+// From convex/waiting_list.ts:199-229
+export const cleanupExpiredOffers = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    
+    // Find all expired but not yet cleaned up offers
+    const expiredOffers = await ctx.db
+      .query("waitingList")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("status"), WAITING_LIST_STATUS.OFFERED),
+          q.lt(q.field("offerExpiresAt"), now)
+        )
+      )
+      .collect();
+    
+    // Group by event for batch processing
+    const grouped = groupByEvent(expiredOffers);
+    
+    // Process each event's expired offers and update queue
+    for (const [eventId, offers] of Object.entries(grouped)) {
+      await Promise.all(
+        offers.map((offer) =>
+          ctx.db.patch(offer._id, {
+            status: WAITING_LIST_STATUS.EXPIRED,
+          })
+        )
+      );
+      
+      await processQueueX(ctx, eventId as Id<"events">);
+    }
+  },
+});
+```
+
+<Tip>
+  The cleanup job acts as a fail-safe. Individual offers are designed to expire via scheduled jobs, but this ensures any offers that weren't properly expired (due to server issues) are caught and cleaned up.
+</Tip>
+
+---
+
+## Database Schema
+
+All features are built on a robust Convex schema:
+
+```typescript
+// From convex/schema.ts:4-58
+export default defineSchema({
+  events: defineTable({
+    name: v.string(),
+    description: v.string(),
+    location: v.string(),
+    eventDate: v.number(),
+    price: v.number(),
+    totalTickets: v.number(),
+    userId: v.string(),
+    imageStorageId: v.optional(v.id("_storage")),
+    is_cancelled: v.optional(v.boolean()),
+  }),
+  
+  tickets: defineTable({
+    eventId: v.id("events"),
+    userId: v.string(),
+    purchasedAt: v.number(),
+    status: v.union(
+      v.literal("valid"),
+      v.literal("used"),
+      v.literal("refunded"),
+      v.literal("cancelled")
+    ),
+    paymentIntentId: v.optional(v.string()),
+    amount: v.optional(v.number()),
+  })
+    .index("by_event", ["eventId"])
+    .index("by_user", ["userId"])
+    .index("by_user_event", ["userId", "eventId"])
+    .index("by_payment_intent", ["paymentIntentId"]),
+  
+  waitingList: defineTable({
+    eventId: v.id("events"),
+    userId: v.string(),
+    status: v.union(
+      v.literal("waiting"),
+      v.literal("offered"),
+      v.literal("purchased"),
+      v.literal("expired")
+    ),
+    offerExpiresAt: v.optional(v.number()),
+  })
+    .index("by_event_status", ["eventId", "status"])
+    .index("by_user_event", ["userId", "eventId"])
+    .index("by_user", ["userId"]),
+  
+  users: defineTable({
+    name: v.string(),
+    email: v.string(),
+    userId: v.string(),
+    phone: v.optional(v.string()),
+    stripeConnectId: v.optional(v.string()),
+  })
+    .index("by_user_id", ["userId"])
+    .index("by_email", ["email"]),
+});
+```
+
+The schema uses strategic indexes to optimize common queries:
+- `by_event` and `by_user` for fast lookups
+- `by_user_event` for checking if a user already has a ticket
+- `by_event_status` for efficient waiting list queries
+- `by_payment_intent` for webhook processing

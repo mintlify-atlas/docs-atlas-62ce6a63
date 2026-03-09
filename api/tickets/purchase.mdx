@@ -1,0 +1,128 @@
+---
+title: 'Purchase Ticket'
+description: 'Purchase a ticket using a valid waiting list offer'
+---
+
+## Endpoint
+
+```typescript
+events.purchaseTicket
+```
+
+## Description
+
+Purchases a ticket for an event using a valid waiting list offer. This mutation validates the waiting list entry, creates the ticket with payment information, and automatically processes the queue for the next person in line.
+
+**Source:** `convex/events.ts:192-275`
+
+## Parameters
+
+<ParamField path="eventId" type="Id<'events'>" required>
+  The unique identifier of the event for which to purchase a ticket
+</ParamField>
+
+<ParamField path="userId" type="string" required>
+  The unique identifier of the user purchasing the ticket (must match the waiting list entry)
+</ParamField>
+
+<ParamField path="waitingListId" type="Id<'waitingList'>" required>
+  The waiting list entry ID with "offered" status. The offer must not be expired.
+</ParamField>
+
+<ParamField path="paymentInfo" type="object" required>
+  Payment information object containing Stripe payment details
+  
+  <ParamField path="paymentInfo.paymentIntentId" type="string" required>
+    Stripe payment intent ID for the transaction
+  </ParamField>
+  
+  <ParamField path="paymentInfo.amount" type="number" required>
+    Amount paid for the ticket in cents (e.g., 5000 for $50.00)
+  </ParamField>
+</ParamField>
+
+## Waiting List Validation
+
+The endpoint performs strict validation on the waiting list entry:
+
+1. **Entry Exists** - The waiting list entry must exist in the database
+2. **Status Check** - Entry must have status "offered" (not waiting, expired, or purchased)
+3. **User Match** - The userId in the request must match the userId on the waiting list entry
+4. **Offer Expiration** - The offer must not have expired (checked by status)
+
+If any validation fails, the purchase is rejected with a descriptive error.
+
+## Event Validation
+
+The endpoint also validates the event:
+
+- Event must exist
+- Event must not be cancelled (`is_cancelled` must be false/undefined)
+
+## Response
+
+The mutation does not return a value on success. If the purchase fails, an error is thrown.
+
+### Errors
+
+- `"Waiting list entry not found"` - The waitingListId doesn't exist
+- `"Invalid waiting list status - ticket offer may have expired"` - The entry is not in "offered" status
+- `"Waiting list entry does not belong to this user"` - userId mismatch
+- `"Event not found"` - The eventId doesn't exist
+- `"Event is no longer active"` - The event has been cancelled
+- `"Failed to complete ticket purchase: {error}"` - Generic error during ticket creation
+
+## Side Effects
+
+1. **Ticket Creation** - A new ticket is created with:
+   - Status: "valid"
+   - Purchase timestamp
+   - Payment intent ID and amount
+
+2. **Waiting List Update** - The waiting list entry status is changed to "purchased"
+
+3. **Queue Processing** - The next person in the waiting list is automatically offered a ticket
+
+## Example
+
+```typescript
+import { useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+function PurchaseTicketButton({ eventId, waitingListId, userId }) {
+  const purchaseTicket = useMutation(api.events.purchaseTicket);
+  
+  const handlePurchase = async (paymentIntentId: string, amount: number) => {
+    try {
+      await purchaseTicket({
+        eventId,
+        userId,
+        waitingListId,
+        paymentInfo: {
+          paymentIntentId,
+          amount, // Amount in cents
+        },
+      });
+      
+      console.log("Ticket purchased successfully!");
+    } catch (error) {
+      console.error("Purchase failed:", error);
+    }
+  };
+  
+  return (
+    <button onClick={() => handlePurchase("pi_abc123", 5000)}>
+      Purchase Ticket
+    </button>
+  );
+}
+```
+
+## Payment Flow
+
+1. User receives a ticket offer (waiting list status: "offered")
+2. Frontend initiates Stripe payment
+3. Stripe returns paymentIntentId
+4. Call `purchaseTicket` with payment information
+5. Ticket is created and payment is tracked
+6. Next user in queue receives an offer automatically

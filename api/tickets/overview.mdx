@@ -1,0 +1,58 @@
+---
+title: 'Tickets API Overview'
+description: 'Manage ticket purchases, status updates, and user tickets in Ticket Hub'
+---
+
+## Introduction
+
+The Tickets API provides endpoints for managing ticket purchases, retrieving user tickets, and updating ticket statuses. All ticket operations are tightly integrated with the waiting list system to ensure fair ticket distribution.
+
+## Ticket Status Lifecycle
+
+Tickets can have one of four statuses:
+
+- **valid** - Ticket is active and can be used for event entry
+- **used** - Ticket has been scanned and used for event entry
+- **refunded** - Ticket has been refunded to the user
+- **cancelled** - Ticket has been cancelled
+
+## Available Endpoints
+
+### Mutations
+
+<Card title="Purchase Ticket" icon="ticket" href="/api/tickets/purchase">
+  Purchase a ticket using a valid waiting list offer
+</Card>
+
+<Card title="Update Ticket Status" icon="pen" href="/api/tickets/update-status">
+  Update the status of an existing ticket
+</Card>
+
+### Queries
+
+<Card title="Get User Tickets" icon="list" href="/api/tickets/get-user-tickets">
+  Retrieve all tickets for a specific user with event details
+</Card>
+
+## Key Concepts
+
+### Waiting List Integration
+
+Ticket purchases require a valid waiting list entry with "offered" status. This ensures:
+- Fair ticket distribution through the queue system
+- Time-limited ticket offers that prevent hoarding
+- Automatic queue progression when tickets are purchased
+
+### Payment Information
+
+All ticket purchases include payment tracking with:
+- Payment intent ID for Stripe integration
+- Amount paid for the ticket
+- Purchase timestamp
+
+### Event Validation
+
+The API validates that:
+- Events exist and are not cancelled
+- Ticket offers haven't expired
+- Users own the waiting list entry they're using

@@ -1,0 +1,423 @@
+---
+title: "events.search"
+description: "Search for events by name, description, or location"
+---
+
+The `events.search` query performs a case-insensitive search across event names, descriptions, and locations to find matching active events.
+
+## Function Signature
+
+```typescript
+export const search = query({
+  args: { searchTerm: v.string() },
+  handler: async (ctx, { searchTerm }) => {
+    const events = await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("is_cancelled"), undefined))
+      .collect();
+
+    return events.filter((event) => {
+      const searchTermLower = searchTerm.toLowerCase();
+      return (
+        event.name.toLowerCase().includes(searchTermLower) ||
+        event.description.toLowerCase().includes(searchTermLower) ||
+        event.location.toLowerCase().includes(searchTermLower)
+      );
+    });
+  },
+});
+```
+
+**Source**: `convex/events.ts:370-387`
+
+## Parameters
+
+<ParamField path="searchTerm" type="string" required>
+  The search query to match against event fields. Case-insensitive.
+  
+  **Example**: `"music"`, `"New York"`, `"festival"`
+  
+  <Tip>
+    The search matches partial strings, so "music" will match "Summer Music Festival" and "Musical Theater Night".
+  </Tip>
+</ParamField>
+
+## Returns
+
+<ResponseField name="events" type="Array<Event>">
+  Array of event objects that match the search criteria. Returns an empty array if no matches found.
+  
+  Each event object contains:
+  - `_id` - Event ID
+  - `name` - Event name
+  - `description` - Event description
+  - `location` - Event location
+  - `eventDate` - Event timestamp
+  - `price` - Ticket price
+  - `totalTickets` - Total capacity
+  - `userId` - Organizer ID
+  - `imageStorageId` - Image reference (optional)
+</ResponseField>
+
+## Request Example
+
+```typescript
+import { useQuery } from "convex/react";
+import { useSearchParams } from "next/navigation";
+import { api } from "../convex/_generated/api";
+
+function SearchPage() {
+  const searchParams = useSearchParams();
+  const query = searchParams.get("q") || "";
+  
+  const searchResults = useQuery(api.events.search, { 
+    searchTerm: query 
+  });
+
+  if (!searchResults) {
+    return <LoadingSpinner />;
+  }
+
+  return (
+    <div>
+      <h1>Search Results for "{query}"</h1>
+      <p>Found {searchResults.length} events</p>
+      
+      {searchResults.map((event) => (
+        <EventCard key={event._id} eventId={event._id} />
+      ))}
+    </div>
+  );
+}
+```
+
+**Source**: `src/app/search/page.tsx:10-45`
+
+## Response Example
+
+```json
+[
+  {
+    "_id": "k17abc123",
+    "name": "Summer Music Festival",
+    "description": "Annual outdoor music festival featuring local artists",
+    "location": "Central Park, New York, NY",
+    "eventDate": 1752624000000,
+    "price": 45.00,
+    "totalTickets": 500,
+    "userId": "user_123",
+    "imageStorageId": "storage_456"
+  },
+  {
+    "_id": "k17def456",
+    "name": "Classical Music Concert",
+    "description": "Evening of classical compositions",
+    "location": "Symphony Hall, Boston, MA",
+    "eventDate": 1755302400000,
+    "price": 65.00,
+    "totalTickets": 200,
+    "userId": "user_789"
+  }
+]
+```
+
+## Search Behavior
+
+### Searchable Fields
+
+The query searches across three fields:
+
+1. **Event Name** (`event.name`)
+   - Example: "Summer Music Festival"
+   - Matches: "music", "summer", "festival"
+
+2. **Event Description** (`event.description`)
+   - Example: "Annual outdoor music festival featuring local artists"
+   - Matches: "annual", "outdoor", "artists", "local"
+
+3. **Event Location** (`event.location`)
+   - Example: "Central Park, New York, NY"
+   - Matches: "central", "park", "new york", "ny"
+
+### Case-Insensitive Matching
+
+```typescript
+const searchTermLower = searchTerm.toLowerCase();
+event.name.toLowerCase().includes(searchTermLower)
+```
+
+Search terms are converted to lowercase for comparison:
+- `"MUSIC"` matches `"Summer Music Festival"`
+- `"NeW YoRk"` matches `"New York, NY"`
+
+**Source**: `convex/events.ts:379-384`
+
+### Partial String Matching
+
+The search uses substring matching with `.includes()`:
+- `"fest"` matches `"festival"`
+- `"park"` matches `"Central Park"`
+- `"music"` matches `"Musical", "Music", "Musician"`
+
+### Active Events Only
+
+Cancelled events are automatically excluded:
+
+```typescript
+.filter((q) => q.eq(q.field("is_cancelled"), undefined))
+```
+
+Only events without the `is_cancelled` flag are searched.
+
+**Source**: `convex/events.ts:375`
+
+## Common Use Cases
+
+### Search by Event Type
+
+```typescript
+const musicEvents = useQuery(api.events.search, { 
+  searchTerm: "music" 
+});
+```
+
+### Search by Location
+
+```typescript
+const nyEvents = useQuery(api.events.search, { 
+  searchTerm: "New York" 
+});
+```
+
+### Search by Keyword
+
+```typescript
+const festivalEvents = useQuery(api.events.search, { 
+  searchTerm: "festival" 
+});
+```
+
+### Empty Search
+
+```typescript
+// Returns all active events
+const allEvents = useQuery(api.events.search, { 
+  searchTerm: "" 
+});
+```
+
+<Note>
+  An empty search term (`""`) matches all active events since `"".includes("")` is always `true`.
+</Note>
+
+## Filtering Search Results
+
+You can further filter results on the client side:
+
+### Filter by Date (Upcoming Events)
+
+```typescript
+const searchResults = useQuery(api.events.search, { searchTerm: query });
+
+const upcomingEvents = searchResults
+  ?.filter(event => event.eventDate > Date.now())
+  .sort((a, b) => a.eventDate - b.eventDate);
+```
+
+**Source**: `src/app/search/page.tsx:23-25`
+
+### Filter by Date (Past Events)
+
+```typescript
+const pastEvents = searchResults
+  ?.filter(event => event.eventDate <= Date.now())
+  .sort((a, b) => b.eventDate - a.eventDate);
+```
+
+**Source**: `src/app/search/page.tsx:27-29`
+
+### Filter by Price Range
+
+```typescript
+const affordableEvents = searchResults
+  ?.filter(event => event.price <= 50);
+```
+
+### Filter by Availability
+
+```typescript
+import { useQuery } from "convex/react";
+
+function SearchWithAvailability({ searchTerm }) {
+  const searchResults = useQuery(api.events.search, { searchTerm });
+  
+  // Check availability for each event
+  const availableEvents = searchResults?.filter(event => {
+    const availability = useQuery(api.events.getEventAvailability, {
+      eventId: event._id
+    });
+    return availability && !availability.isSoldOut;
+  });
+}
+```
+
+## Search Form Integration
+
+### Basic Search Form
+
+```tsx
+import Form from "next/form";
+import { Search } from "lucide-react";
+
+export default function SearchBar() {
+  return (
+    <Form action="/search">
+      <input
+        type="text"
+        name="q"
+        placeholder="Search for events..."
+      />
+      <button type="submit">
+        <Search /> Search
+      </button>
+    </Form>
+  );
+}
+```
+
+**Source**: `src/components/search-bar.tsx:4-24`
+
+### Search Results Page
+
+```tsx
+"use client";
+
+import { useSearchParams } from "next/navigation";
+import { useQuery } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+export default function SearchPage() {
+  const searchParams = useSearchParams();
+  const query = searchParams.get("q") || "";
+  const searchResults = useQuery(api.events.search, { searchTerm: query });
+
+  return (
+    <div>
+      <h1>Search Results for "{query}"</h1>
+      <p>Found {searchResults?.length || 0} events</p>
+      
+      {searchResults?.length === 0 && (
+        <div>
+          <p>No events found</p>
+          <p>Try adjusting your search terms</p>
+        </div>
+      )}
+      
+      <div>
+        {searchResults?.map(event => (
+          <EventCard key={event._id} eventId={event._id} />
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+**Source**: `src/app/search/page.tsx`
+
+## Performance Considerations
+
+<Warning>
+  **Client-Side Filtering**
+  
+  The search query fetches ALL active events and filters them in-memory. For large event catalogs (1000+ events), this may impact performance.
+  
+  Consider implementing pagination or server-side search for better performance with large datasets.
+</Warning>
+
+### Current Implementation
+
+```typescript
+// Fetches all events, then filters in memory
+const events = await ctx.db.query("events").collect();
+return events.filter(event => /* search logic */);
+```
+
+### Optimization Strategies
+
+1. **Limit Results**: Add client-side limiting
+   ```typescript
+   const results = searchResults?.slice(0, 50); // First 50 results
+   ```
+
+2. **Debounced Search**: Reduce query frequency
+   ```typescript
+   import { useDebouncedValue } from "@/hooks/use-debounce";
+   
+   const debouncedSearchTerm = useDebouncedValue(searchTerm, 300);
+   const results = useQuery(api.events.search, { 
+     searchTerm: debouncedSearchTerm 
+   });
+   ```
+
+3. **Pagination**: Implement pagination on results
+   ```typescript
+   const pageSize = 20;
+   const displayedEvents = searchResults?.slice(
+     page * pageSize, 
+     (page + 1) * pageSize
+   );
+   ```
+
+## Empty Search Handling
+
+```typescript
+function SearchResults({ searchResults, query }) {
+  if (!searchResults) {
+    return <LoadingSpinner />;
+  }
+  
+  if (searchResults.length === 0) {
+    return (
+      <div>
+        <Search className="w-12 h-12 text-gray-300" />
+        <h3>No events found</h3>
+        <p>Try adjusting your search terms or browse all events</p>
+      </div>
+    );
+  }
+  
+  return (
+    <div>
+      {searchResults.map(event => (
+        <EventCard key={event._id} eventId={event._id} />
+      ))}
+    </div>
+  );
+}
+```
+
+**Source**: `src/app/search/page.tsx:48-58`
+
+## Related Endpoints
+
+- [events.get](/api/events) - Get all active events without filtering
+- [events.getById](/api/events) - Retrieve specific event details
+- [events.getEventAvailability](/api/events) - Check ticket availability
+- [events.getSellerEvents](/api/events) - Get events by organizer
+
+## Best Practices
+
+<Tip>
+  1. **Debounce search input** to reduce unnecessary queries (300ms recommended)
+  2. **Show loading state** while search results are being fetched
+  3. **Handle empty results** with helpful messaging
+  4. **Sort results** by relevance or date on the client side
+  5. **Implement pagination** for better UX with many results
+  6. **Preserve search state** in URL query parameters for shareable links
+  7. **Add filters** (date range, price, location) for refined searching
+</Tip>
+
+<Note>
+  Search results automatically exclude cancelled events. You don't need to filter them separately.
+</Note>

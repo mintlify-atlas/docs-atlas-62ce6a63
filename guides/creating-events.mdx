@@ -1,0 +1,239 @@
+---
+title: Creating Events
+description: Step-by-step guide to creating and publishing events on Ticket Hub
+---
+
+Learn how to create engaging events, set up ticketing, and publish to your audience.
+
+## Prerequisites
+
+Before creating an event, ensure you have:
+
+- A Ticket Hub account
+- Stripe Connect account set up (required for paid events)
+- Event details ready (name, description, location, date)
+- Event image (optional, but recommended)
+
+## Creating Your First Event
+
+<Steps>
+  <Step title="Navigate to Create Event">
+    From your dashboard, click the **Create Event** button or navigate to `/seller`.
+  </Step>
+
+  <Step title="Fill in Event Details">
+    Complete the event form with the following information:
+
+    ### Event Name
+    Enter a clear, descriptive name for your event.
+    
+    **Example:** "Summer Music Festival 2026" or "Tech Conference: Future of AI"
+
+    ### Description
+    Provide a detailed description of your event. Include:
+    - What attendees can expect
+    - Event highlights
+    - Schedule overview
+    - Any special requirements
+
+    ### Location
+    Specify the venue address or location.
+    
+    **Example:** "Central Park Amphitheater, New York" or "Virtual Event (Zoom link provided)"
+
+    ### Event Date
+    Select the date when your event will take place. The system validates that the date is in the future.
+
+    <Note>
+      Event dates must be set to today or later. Past dates are not accepted.
+    </Note>
+  </Step>
+
+  <Step title="Configure Pricing">
+    Set your ticket price:
+
+    - **Price per Ticket:** Enter the amount in GBP (British Pounds)
+    - Minimum: £0 (free events)
+    - Platform fee: 1% of ticket price
+
+    **Pricing Examples:**
+    - Free event: £0
+    - Community event: £5-15
+    - Professional conference: £50-200
+    - Premium concert: £100+
+
+    <Tip>
+      For free events (£0), you can still track attendance and manage capacity without payment processing.
+    </Tip>
+  </Step>
+
+  <Step title="Set Ticket Capacity">
+    Define the total number of tickets available:
+
+    - **Total Tickets Available:** Minimum of 1 ticket
+    - Consider venue capacity
+    - Plan for demand management
+
+    The system automatically:
+    - Tracks sold tickets
+    - Manages waiting list
+    - Prevents overselling
+  </Step>
+
+  <Step title="Upload Event Image">
+    Add a visual element to make your event stand out:
+
+    1. Click the file upload button
+    2. Select an image from your device
+    3. Preview the image before submitting
+    4. Remove and replace if needed
+
+    **Image Requirements:**
+    - Supported formats: JPEG, PNG, WebP
+    - Recommended size: 1200x630px
+    - Aspect ratio: Square or landscape works best
+
+    **Image Upload Process:**
+    - Files are securely uploaded to Convex storage
+    - Images are linked to your event
+    - You can update or remove images later
+
+    <Warning>
+      If you remove an image in edit mode and upload a new one, the old image is automatically deleted from storage.
+    </Warning>
+  </Step>
+
+  <Step title="Review and Publish">
+    Before publishing:
+
+    1. Review all entered information
+    2. Verify pricing and capacity
+    3. Check image preview
+    4. Click **Create Event**
+
+    The system will:
+    - Validate all form fields
+    - Upload your event image
+    - Create the event in the database
+    - Redirect you to the event page
+  </Step>
+</Steps>
+
+## After Publishing
+
+Once your event is published:
+
+### Event is Live
+Your event appears in:
+- Event listings
+- Search results
+- Your seller dashboard
+
+### Share Your Event
+Share the event URL:
+```
+https://yourdomain.com/event/{eventId}
+```
+
+### Monitor Activity
+Track real-time metrics:
+- Tickets sold
+- Waiting list size
+- Revenue generated
+- Available capacity
+
+## Editing Events
+
+You can update event details after publishing:
+
+<Steps>
+  <Step title="Access Edit Mode">
+    Navigate to your event page and click **Edit Event**.
+  </Step>
+
+  <Step title="Update Information">
+    Modify any field:
+    - Event name and description
+    - Location or date
+    - Pricing (if no tickets sold)
+    - Capacity (cannot go below sold tickets)
+    - Event image
+  </Step>
+
+  <Step title="Save Changes">
+    Click **Update Event** to save your changes.
+
+    <Note>
+      You cannot reduce total tickets below the number already sold. For example, if you've sold 50 tickets, the minimum capacity is 50.
+    </Note>
+  </Step>
+</Steps>
+
+## Event Form Validation
+
+The system enforces these rules:
+
+| Field | Requirement |
+|-------|-------------|
+| Event Name | Required, minimum 1 character |
+| Description | Required, minimum 1 character |
+| Location | Required, minimum 1 character |
+| Event Date | Must be today or future date |
+| Price | Must be 0 or greater |
+| Total Tickets | Minimum 1 ticket |
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Write Clear Descriptions" icon="pen">
+    Include all relevant details about your event. Answer: What? When? Where? Why should people attend?
+  </Card>
+
+  <Card title="Use High-Quality Images" icon="image">
+    Professional photos increase engagement and ticket sales. Use bright, clear images that represent your event.
+  </Card>
+
+  <Card title="Price Competitively" icon="money-bill">
+    Research similar events in your area. Consider early bird pricing or tiered pricing strategies.
+  </Card>
+
+  <Card title="Set Realistic Capacity" icon="users">
+    Don't overcommit. Consider venue limitations, staffing, and resources.
+  </Card>
+</CardGroup>
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Why can't I create a paid event?">
+    You need to set up Stripe Connect first. Navigate to your seller dashboard and complete the Stripe onboarding process. See [Selling Tickets](/guides/selling-tickets) for details.
+  </Accordion>
+
+  <Accordion title="Can I change the price after tickets are sold?">
+    Yes, but it only affects future ticket purchases. Existing ticket holders keep their original price.
+  </Accordion>
+
+  <Accordion title="My image won't upload">
+    Check that:
+    - File size is under 10MB
+    - Format is JPEG, PNG, or WebP
+    - You have a stable internet connection
+    - Try a different image or resize the file
+  </Accordion>
+
+  <Accordion title="Can I reduce ticket capacity?">
+    You can only reduce capacity to the number of tickets already sold. You cannot go below this number.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Monitor Sales" icon="chart-line" href="/guides/selling-tickets#monitoring-sales">
+    Learn how to track ticket sales and revenue
+  </Card>
+
+  <Card title="Manage Refunds" icon="rotate-left" href="/guides/managing-refunds">
+    Understand the refund process and policies
+  </Card>
+</CardGroup>

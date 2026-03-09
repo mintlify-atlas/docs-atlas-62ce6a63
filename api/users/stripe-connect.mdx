@@ -1,0 +1,197 @@
+---
+title: "Get Stripe Connect ID"
+description: "Retrieve a user's Stripe Connect account ID for payment processing"
+---
+
+## Query: getUsersStripeConnectId
+
+Retrieve a user's Stripe Connect account ID. This query only returns the ID if the user has completed Stripe Connect onboarding.
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useQuery } from "convex/react";
+
+const stripeConnectId = useQuery(api.users.getUsersStripeConnectId, { 
+  userId: "user_2abc123def456" 
+});
+```
+
+## Parameters
+
+<ParamField path="userId" type="string" required>
+  The Clerk user ID of the organizer whose Stripe Connect ID you want to retrieve.
+  
+  Example: `"user_2abc123def456"`
+</ParamField>
+
+## Response
+
+Returns the Stripe Connect account ID as a string, or `undefined` if:
+- No user exists with the given `userId`
+- The user has not connected their Stripe account
+
+```typescript
+string | undefined
+```
+
+## Example Response
+
+```json
+"acct_1MZy3x2Abc123Def"
+```
+
+## Use Cases
+
+### Check if User Can Create Paid Events
+
+```typescript
+function CreateEventButton({ userId }: { userId: string }) {
+  const stripeConnectId = useQuery(
+    api.users.getUsersStripeConnectId, 
+    { userId }
+  );
+  
+  if (!stripeConnectId) {
+    return (
+      <div>
+        <p>Connect your Stripe account to create paid events</p>
+        <StripeConnectButton />
+      </div>
+    );
+  }
+  
+  return <CreatePaidEventForm />;
+}
+```
+
+### Route Payment to Event Organizer
+
+```typescript
+async function processTicketPurchase(
+  eventId: string, 
+  buyerUserId: string
+) {
+  // Get event details
+  const event = await ctx.db.get(eventId);
+  
+  // Get organizer's Stripe Connect ID
+  const stripeConnectId = await ctx.runQuery(
+    api.users.getUsersStripeConnectId,
+    { userId: event.userId }
+  );
+  
+  if (!stripeConnectId) {
+    throw new Error("Organizer has not connected Stripe account");
+  }
+  
+  // Create payment intent with connected account
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: event.price * 100,
+    currency: "usd",
+    transfer_data: {
+      destination: stripeConnectId,
+    },
+  });
+}
+```
+
+### Display Organizer Payment Status
+
+```typescript
+function OrganizerDashboard({ userId }: { userId: string }) {
+  const stripeConnectId = useQuery(
+    api.users.getUsersStripeConnectId,
+    { userId }
+  );
+  
+  return (
+    <div>
+      <h2>Payment Settings</h2>
+      {stripeConnectId ? (
+        <div>
+          <CheckIcon /> Connected to Stripe
+          <p>Account ID: {stripeConnectId}</p>
+          <a href={`https://dashboard.stripe.com/${stripeConnectId}`}>
+            View Stripe Dashboard
+          </a>
+        </div>
+      ) : (
+        <div>
+          <WarningIcon /> Not connected to Stripe
+          <p>Connect your account to receive payments</p>
+          <StripeConnectButton />
+        </div>
+      )}
+    </div>
+  );
+}
+```
+
+## Implementation Details
+
+The query filters for users with a defined `stripeConnectId`:
+
+```typescript
+const user = await ctx.db
+  .query("users")
+  .filter((q) => q.eq(q.field("userId"), args.userId))
+  .filter((q) => q.neq(q.field("stripeConnectId"), undefined))
+  .first();
+
+return user?.stripeConnectId;
+```
+
+### Why Use This Query?
+
+While you could use `getUserById` and access the `stripeConnectId` field, this query:
+
+1. **Returns only the ID**: Reduces data transfer when you only need the Connect ID
+2. **Filters for defined values**: Only returns results if the user has completed Stripe onboarding
+3. **Optimizes for payment flows**: Purpose-built for payment routing logic
+
+## Stripe Connect Setup
+
+### Setting the Stripe Connect ID
+
+The Stripe Connect ID is set through the `updateOrCreateUserStripeConnectId` mutation (internal use):
+
+```typescript
+await ctx.runMutation(api.users.updateOrCreateUserStripeConnectId, {
+  userId: "user_2abc123def456",
+  stripeConnectId: "acct_1MZy3x2Abc123Def"
+});
+```
+
+### Stripe Connect Onboarding Flow
+
+1. User initiates Stripe Connect onboarding
+2. Complete Stripe's account verification
+3. On success, call `updateOrCreateUserStripeConnectId` with the account ID
+4. User can now create paid events
+
+## Error Handling
+
+- Returns `undefined` if user doesn't exist or hasn't connected Stripe
+- Returns `undefined` while loading (in React components)
+- Throws error in `updateOrCreateUserStripeConnectId` if user not found
+
+## Related Endpoints
+
+- [Get User by ID](/api/users/get-user) - Retrieve complete user profile
+- [Users Overview](/api/users/overview) - Learn about user management
+
+## Security Considerations
+
+<Warning>
+  This query does not implement access control. In production:
+  - Only allow users to query their own Stripe Connect ID
+  - Implement authentication checks in your application layer
+  - Consider making this an authenticated query with identity checks
+</Warning>
+
+## Notes
+
+- Stripe Connect account IDs follow the format `acct_*`
+- Users must complete Stripe's verification process before receiving payments
+- The `stripeConnectId` field is optional in the schema
+- Platform fees can be configured in your Stripe payment intent creation

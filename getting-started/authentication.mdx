@@ -1,0 +1,327 @@
+---
+title: 'Authentication'
+description: 'Set up Clerk authentication for Ticket Hub'
+icon: 'shield-check'
+---
+
+## Overview
+
+Ticket Hub uses [Clerk](https://clerk.com) for authentication and user management. Clerk provides secure, production-ready authentication with social logins, email/password, and magic links out of the box.
+
+## Clerk Setup
+
+<Steps>
+  <Step title="Create a Clerk account">
+    If you don't have one already, sign up at [clerk.com](https://clerk.com).
+  </Step>
+
+  <Step title="Create a new application">
+    In your Clerk dashboard:
+    1. Click **+ Create Application**
+    2. Name it "Ticket Hub" (or your preferred name)
+    3. Select your preferred authentication methods
+    4. Click **Create Application**
+  </Step>
+
+  <Step title="Copy API keys">
+    From your Clerk dashboard, copy the following keys:
+
+    - **Publishable Key** - Used in the client-side code
+    - **Secret Key** - Used server-side (keep this secure!)
+
+    Add them to your `.env.local` file:
+
+    ```bash
+    NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
+    CLERK_SECRET_KEY=sk_test_...
+    ```
+  </Step>
+
+  <Step title="Configure URLs">
+    Set the sign-in and sign-up URLs in your `.env.local`:
+
+    ```bash
+    NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+    NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+    ```
+  </Step>
+
+  <Step title="Set up webhooks">
+    Clerk webhooks keep your Convex database in sync with user changes.
+
+    1. In Clerk dashboard, go to **Webhooks**
+    2. Click **+ Add Endpoint**
+    3. Enter your endpoint URL: `https://your-app.vercel.app/api/webhooks/clerk`
+    4. Subscribe to these events:
+       - `user.created`
+       - `user.updated`
+       - `user.deleted`
+    5. Copy the **Signing Secret**
+
+    Add the webhook secret to `.env.local`:
+
+    ```bash
+    CLERK_WEBHOOK_SECRET=whsec_...
+    ```
+  </Step>
+</Steps>
+
+## Convex Auth Configuration
+
+Ticket Hub integrates Clerk with Convex for secure backend authentication.
+
+### Auth Config File
+
+The Convex auth configuration is defined in `convex/auth.config.ts`:
+
+```typescript convex/auth.config.ts
+export default {
+  providers: [
+    {
+      domain: "https://eminent-rooster-80.clerk.accounts.dev",
+      applicationID: "convex",
+    },
+  ],
+};
+```
+
+<Note>
+  Replace the `domain` with your Clerk Frontend API URL from your Clerk dashboard under **API Keys** → **Advanced**.
+</Note>
+
+### How It Works
+
+1. **Client Authentication**: Users sign in through Clerk's UI components
+2. **Token Generation**: Clerk generates a JWT token
+3. **Convex Validation**: The token is sent with Convex requests and validated
+4. **User Context**: Authenticated user info is available in Convex functions
+
+## Middleware Configuration
+
+The Next.js middleware protects routes and handles authentication:
+
+```typescript src/middleware.ts
+import { clerkMiddleware } from "@clerk/nextjs/server";
+
+export default clerkMiddleware();
+
+export const config = {
+  matcher: [
+    // Skip Next.js internals and all static files
+    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    // Always run for API routes
+    "/(api|trpc)(.*)",
+  ],
+};
+```
+
+<Info>
+  The middleware automatically protects all routes except static assets and Next.js internals. Public routes can be configured in Clerk dashboard.
+</Info>
+
+## Root Layout Integration
+
+Clerk is integrated in the root layout (`src/app/layout.tsx`):
+
+```typescript src/app/layout.tsx
+import { ClerkLoaded, ClerkLoading, ClerkProvider } from "@clerk/nextjs";
+import { dark } from "@clerk/themes";
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body>
+        <ClerkProvider
+          appearance={{
+            baseTheme: dark,
+            elements: {
+              footer: {
+                display: "none",
+              },
+            },
+            layout: {
+              unsafe_disableDevelopmentModeWarnings: true,
+            },
+          }}
+        >
+          <ClerkLoading>
+            <div className="flex items-center justify-center h-screen">
+              <LoadingSpinner variant="ring" />
+            </div>
+          </ClerkLoading>
+          <ClerkLoaded>
+            <ConvexClientProvider>
+              <main className="flex flex-col relative min-h-screen">
+                <Providers>
+                  <Navbar />
+                  {children}
+                </Providers>
+              </main>
+            </ConvexClientProvider>
+          </ClerkLoaded>
+        </ClerkProvider>
+      </body>
+    </html>
+  );
+}
+```
+
+### Key Components
+
+<CardGroup cols={2}>
+  <Card title="ClerkProvider" icon="plug">
+    Wraps the entire app and provides authentication context
+  </Card>
+  <Card title="ClerkLoading" icon="spinner">
+    Shows a loading state while Clerk initializes
+  </Card>
+  <Card title="ClerkLoaded" icon="check">
+    Renders content only after Clerk is ready
+  </Card>
+  <Card title="ConvexClientProvider" icon="database">
+    Integrates Clerk auth tokens with Convex
+  </Card>
+</CardGroup>
+
+## Using Authentication in Your Code
+
+### Client-Side
+
+Access user information in React components:
+
+```typescript
+import { useUser } from "@clerk/nextjs";
+
+export default function MyComponent() {
+  const { user, isLoaded, isSignedIn } = useUser();
+
+  if (!isLoaded) return <div>Loading...</div>;
+  if (!isSignedIn) return <div>Please sign in</div>;
+
+  return <div>Welcome, {user.firstName}!</div>;
+}
+```
+
+### Server-Side (Convex)
+
+Authenticate Convex mutations and queries:
+
+```typescript convex/events.ts
+import { mutation } from "./_generated/server";
+import { v } from "convex/values";
+
+export const create = mutation({
+  args: {
+    name: v.string(),
+    description: v.string(),
+    location: v.string(),
+    eventDate: v.number(),
+    price: v.number(),
+    totalTickets: v.number(),
+    userId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // The userId is passed from the authenticated client
+    const eventId = await ctx.db.insert("events", {
+      name: args.name,
+      description: args.description,
+      location: args.location,
+      eventDate: args.eventDate,
+      price: args.price,
+      totalTickets: args.totalTickets,
+      userId: args.userId, // Creator's user ID from Clerk
+    });
+    return eventId;
+  },
+});
+```
+
+## Customization
+
+### Appearance
+
+Customize Clerk's UI to match your brand:
+
+```typescript
+<ClerkProvider
+  appearance={{
+    baseTheme: dark,
+    variables: {
+      colorPrimary: "#3b82f6",
+      colorText: "white",
+      borderRadius: "0.5rem",
+    },
+    elements: {
+      formButtonPrimary: "bg-blue-600 hover:bg-blue-700",
+      card: "shadow-xl",
+      footer: { display: "none" },
+    },
+  }}
+>
+```
+
+### Protected Routes
+
+Protect specific routes in your Clerk dashboard:
+
+1. Go to **Authentication** → **Routes**
+2. Add protected routes: `/seller`, `/tickets`
+3. Set public routes: `/`, `/event/*`, `/search`
+
+## Environment Variables Summary
+
+<ParamField path="NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY" type="string" required>
+  Your Clerk publishable key (public, client-side)
+</ParamField>
+
+<ParamField path="CLERK_SECRET_KEY" type="string" required>
+  Your Clerk secret key (private, server-side)
+</ParamField>
+
+<ParamField path="CLERK_WEBHOOK_SECRET" type="string" required>
+  Webhook signing secret for verifying Clerk webhooks
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_CLERK_SIGN_IN_URL" type="string" required>
+  Path to your sign-in page (default: `/sign-in`)
+</ParamField>
+
+<ParamField path="NEXT_PUBLIC_CLERK_SIGN_UP_URL" type="string" required>
+  Path to your sign-up page (default: `/sign-up`)
+</ParamField>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="'Clerk: auth() or currentUser() called but Clerk is not installed'">
+    Make sure `ClerkProvider` wraps your entire app in the root layout.
+  </Accordion>
+
+  <Accordion title="Infinite redirect loop">
+    Check that your sign-in/sign-up URLs match in both:
+    - Your `.env.local` file
+    - Clerk dashboard → **Paths**
+  </Accordion>
+
+  <Accordion title="Webhook not receiving events">
+    Verify:
+    - Your webhook URL is publicly accessible (use ngrok for local development)
+    - The signing secret matches your `.env.local`
+    - The correct events are subscribed in Clerk dashboard
+  </Accordion>
+
+  <Accordion title="User data not syncing to Convex">
+    Check your webhook handler implementation and ensure it's processing `user.created`, `user.updated`, and `user.deleted` events correctly.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Environment Setup" icon="gear" href="/getting-started/environment-setup">
+    Configure all required environment variables
+  </Card>
+  <Card title="User API" icon="users" href="/api/users/overview">
+    Learn about user queries and management
+  </Card>
+</CardGroup>

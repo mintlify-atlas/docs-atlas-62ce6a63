@@ -1,0 +1,209 @@
+---
+title: "Refund Event Tickets"
+description: "Process refunds for all tickets associated with a cancelled event"
+---
+
+## refundEventTickets
+
+Processes refunds for all valid tickets associated with an event through Stripe, updates ticket statuses, and cancels the event. This action handles batch refund processing with error handling for individual ticket failures.
+
+### Function Signature
+
+```typescript
+export async function refundEventTickets(
+  eventId: Id<"events">
+): Promise<{ success: boolean }>
+```
+
+### Parameters
+
+<ParamField path="eventId" type="Id<'events'>" required>
+  The unique identifier of the event for which to refund all tickets
+</ParamField>
+
+### Return Value
+
+<ResponseField name="success" type="boolean">
+  Returns `true` if all refunds were processed successfully
+</ResponseField>
+
+### Refund Flow
+
+The action follows a comprehensive workflow to ensure all tickets are properly refunded:
+
+1. **Event Validation**
+   - Fetches event details from Convex database
+   - Throws error if event not found
+
+2. **Stripe Connect ID Retrieval**
+   - Gets the event owner's Stripe Connect account ID
+   - Required for processing refunds through the connected account
+   - Throws error if Stripe Connect ID not found
+
+3. **Ticket Retrieval**
+   - Queries all valid tickets for the event
+   - Only processes tickets with valid payment information
+
+4. **Batch Refund Processing**
+   - Processes all ticket refunds concurrently using `Promise.allSettled`
+   - Each ticket refund includes:
+     - Stripe refund API call
+     - Ticket status update in database
+   - Handles individual ticket failures gracefully
+
+5. **Validation**
+   - Checks if all refunds succeeded
+   - Throws error if any refunds failed
+
+6. **Event Cancellation**
+   - Cancels the event (does not delete it)
+   - Only executed if all refunds succeed
+
+### Stripe Refund API Usage
+
+Each ticket refund uses the Stripe Refunds API with the connected account context:
+
+```typescript
+await stripe.refunds.create(
+  {
+    payment_intent: ticket.paymentIntentId,
+    reason: "requested_by_customer",
+  },
+  {
+    stripeAccount: stripeConnectId,
+  }
+);
+```
+
+### Refund Parameters
+
+- **payment_intent**: The Stripe Payment Intent ID associated with the ticket purchase
+- **reason**: Set to `"requested_by_customer"` for all refunds
+- **stripeAccount**: The event owner's Connect account ID (ensures refund is processed from their account)
+
+### Error Handling
+
+The action implements robust error handling at multiple levels:
+
+#### Event-Level Errors
+
+- Event not found
+- Stripe Connect ID not found
+- Some or all refunds failed
+
+#### Ticket-Level Errors
+
+Individual ticket refunds may fail for various reasons:
+
+- Payment information not found
+- Stripe API errors (e.g., payment intent not refundable)
+- Network issues
+
+The action logs failed tickets but continues processing remaining tickets:
+
+```typescript
+try {
+  if (!ticket.paymentIntentId) {
+    throw new Error("Payment information not found");
+  }
+  
+  await stripe.refunds.create(...);
+  await convex.mutation(...);
+  
+  return { success: true, ticketId: ticket._id };
+} catch (error) {
+  console.error(`Failed to refund ticket ${ticket._id}:`, error);
+  return { success: false, ticketId: ticket._id, error };
+}
+```
+
+### Database Updates
+
+For each successful refund, the ticket status is updated in the Convex database:
+
+```typescript
+await convex.mutation(api.tickets.updateTicketStatus, {
+  ticketId: ticket._id,
+  status: "refunded",
+});
+```
+
+### Event Cancellation
+
+After all refunds are processed successfully, the event is cancelled (not deleted):
+
+```typescript
+await convex.mutation(api.events.cancelEvent, { eventId });
+```
+
+This preserves the event record for historical purposes while marking it as cancelled.
+
+### Example Usage
+
+```typescript
+import { refundEventTickets } from "@/actions/refund-event-ticket";
+import type { Id } from "../../convex/_generated/dataModel";
+
+try {
+  const result = await refundEventTickets(
+    "kg7x8y9z0a1b2c3d4e5f6g7h" as Id<"events">
+  );
+  
+  if (result.success) {
+    console.log("All tickets refunded successfully");
+    // Show success message to user
+  }
+} catch (error) {
+  console.error("Failed to refund tickets:", error);
+  // Show error message to user
+  // Some refunds may have failed - check logs
+}
+```
+
+### Concurrent Processing
+
+The action uses `Promise.allSettled` to process all refunds concurrently, improving performance for events with many tickets:
+
+```typescript
+const results = await Promise.allSettled(
+  tickets.map(async (ticket) => {
+    // Process individual ticket refund
+  })
+);
+```
+
+This approach:
+- Processes all refunds in parallel
+- Doesn't stop processing if one refund fails
+- Collects all results for validation
+
+### Result Validation
+
+```typescript
+const allSuccessful = results.every(
+  (result) => result.status === "fulfilled" && result.value.success
+);
+
+if (!allSuccessful) {
+  throw new Error(
+    "Some refunds failed. Please check the logs and try again."
+  );
+}
+```
+
+### Important Considerations
+
+1. **Authentication**: While this action doesn't explicitly check authentication, it should only be called by authorized users (event organizers)
+
+2. **Stripe Connect Context**: All refunds are processed through the event owner's Stripe Connect account, ensuring funds are returned from the correct account
+
+3. **Idempotency**: If called multiple times for the same event, Stripe will return an error for already-refunded payment intents
+
+4. **Refund Timing**: Refunds typically appear in customer accounts within 5-10 business days, depending on their bank
+
+5. **Application Fees**: When a refund is issued, Stripe automatically handles the return of application fees
+
+### Related Actions
+
+- [Stripe Checkout Session](/api/actions/stripe-checkout) - Creating payment sessions for ticket purchases
+- [Stripe Connect Actions](/api/actions/stripe-connect) - Managing Stripe Connect accounts

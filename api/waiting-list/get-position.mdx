@@ -1,0 +1,283 @@
+---
+title: "getQueuePosition"
+description: "Get a user's position in the event waiting list"
+---
+
+## Query
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useQuery } from "convex/react";
+
+const queuePosition = useQuery(api.waiting_list.getQueuePosition, {
+  eventId,
+  userId,
+});
+```
+
+**Location**: `convex/waiting_list.ts:37-77`
+
+## Description
+
+Retrieves a user's current position in the waiting list for a specific event. Returns `null` if the user is not in the queue or their entry has expired. Otherwise, returns the waiting list entry with their calculated position based on creation time.
+
+## Parameters
+
+<ParamField query="eventId" type="Id<'events'>" required>
+  The ID of the event to check
+</ParamField>
+
+<ParamField query="userId" type="string" required>
+  The unique identifier of the user
+</ParamField>
+
+## Response
+
+Returns `null` if user is not in queue, otherwise returns:
+
+<ResponseField name="_id" type="Id<'waitingList'>" required>
+  The waiting list entry ID
+</ResponseField>
+
+<ResponseField name="eventId" type="Id<'events'>" required>
+  The event ID
+</ResponseField>
+
+<ResponseField name="userId" type="string" required>
+  The user's ID
+</ResponseField>
+
+<ResponseField name="status" type="enum" required>
+  Current status of the waiting list entry
+  
+  - `waiting` - User is in queue waiting for a ticket
+  - `offered` - User has an active ticket offer
+  - `purchased` - User purchased the ticket
+</ResponseField>
+
+<ResponseField name="offerExpiresAt" type="number" optional>
+  Unix timestamp (milliseconds) when the offer expires. Only present when `status` is `offered`.
+</ResponseField>
+
+<ResponseField name="_creationTime" type="number" required>
+  Unix timestamp (milliseconds) when the entry was created
+</ResponseField>
+
+<ResponseField name="position" type="number" required>
+  The user's current position in the queue (1-based). 
+  
+  Calculated as the number of people ahead in line + 1. Only counts entries with `waiting` or `offered` status that were created before this entry.
+</ResponseField>
+
+## How Position is Calculated
+
+The query calculates position by:
+
+1. Finding the user's waiting list entry for the event
+2. Filtering out expired entries
+3. Counting entries created before the user's entry
+4. Only counting entries with `waiting` or `offered` status
+5. Adding 1 to get 1-based position
+
+**Code** (`convex/waiting_list.ts:56-75`):
+```typescript
+// Get total number of people ahead in line
+const peopleAhead = await ctx.db
+  .query("waitingList")
+  .withIndex("by_event_status", (q) => q.eq("eventId", eventId))
+  .filter((q) =>
+    q.and(
+      q.lt(q.field("_creationTime"), entry._creationTime),
+      q.or(
+        q.eq(q.field("status"), WAITING_LIST_STATUS.WAITING),
+        q.eq(q.field("status"), WAITING_LIST_STATUS.OFFERED)
+      )
+    )
+  )
+  .collect()
+  .then((entries) => entries.length);
+
+return {
+  ...entry,
+  position: peopleAhead + 1,
+};
+```
+
+## Examples
+
+### Display Queue Position (React)
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useQuery } from "convex/react";
+import { Id } from "@/convex/_generated/dataModel";
+
+function QueuePosition({ 
+  eventId, 
+  userId 
+}: { 
+  eventId: Id<"events">; 
+  userId: string 
+}) {
+  const position = useQuery(api.waiting_list.getQueuePosition, {
+    eventId,
+    userId,
+  });
+
+  if (position === undefined) {
+    return <div>Loading...</div>;
+  }
+
+  if (position === null) {
+    return <div>You are not in the waiting list</div>;
+  }
+
+  if (position.status === "offered") {
+    const timeLeft = position.offerExpiresAt! - Date.now();
+    const minutesLeft = Math.ceil(timeLeft / (60 * 1000));
+    
+    return (
+      <div className="bg-green-100 p-4 rounded">
+        <h3>Ticket Offer Available!</h3>
+        <p>You have {minutesLeft} minutes to purchase</p>
+        <button>Purchase Now</button>
+      </div>
+    );
+  }
+
+  if (position.status === "waiting") {
+    return (
+      <div className="bg-blue-100 p-4 rounded">
+        <h3>You're in the Queue</h3>
+        <p>Position: #{position.position}</p>
+        <p>We'll notify you when a ticket becomes available</p>
+      </div>
+    );
+  }
+
+  return null;
+}
+```
+
+### Poll for Position Updates
+
+```typescript
+import { api } from "@/convex/_generated/api";
+import { useQuery } from "convex/react";
+import { useEffect } from "react";
+
+function WaitingListMonitor({ eventId, userId }) {
+  const position = useQuery(api.waiting_list.getQueuePosition, {
+    eventId,
+    userId,
+  });
+
+  useEffect(() => {
+    if (position?.status === "offered") {
+      // Show notification
+      new Notification("Ticket Available!", {
+        body: "You have 30 minutes to purchase your ticket",
+      });
+      
+      // Play sound or show modal
+      playNotificationSound();
+    }
+  }, [position?.status]);
+
+  // Render UI...
+}
+```
+
+### Response Examples
+
+**User in Queue (Position 5)**:
+```json
+{
+  "_id": "jx7...",
+  "eventId": "kg8...",
+  "userId": "user_123",
+  "status": "waiting",
+  "_creationTime": 1709982000000,
+  "position": 5
+}
+```
+
+**User Has Active Offer**:
+```json
+{
+  "_id": "jx7...",
+  "eventId": "kg8...",
+  "userId": "user_123",
+  "status": "offered",
+  "offerExpiresAt": 1709983800000,
+  "_creationTime": 1709982000000,
+  "position": 1
+}
+```
+
+**User Not in Queue**:
+```json
+null
+```
+
+## Use Cases
+
+### Real-Time Queue Display
+
+Display live queue position with automatic updates:
+
+```typescript
+function LiveQueueStatus({ eventId, userId }) {
+  const position = useQuery(api.waiting_list.getQueuePosition, {
+    eventId,
+    userId,
+  });
+
+  if (!position) return <div>Not in queue</div>;
+
+  return (
+    <div>
+      <h3>Your Position: #{position.position}</h3>
+      {position.status === "waiting" && (
+        <p>Estimated wait: ~{position.position * 5} minutes</p>
+      )}
+    </div>
+  );
+}
+```
+
+### Offer Expiration Countdown
+
+Show countdown timer for active offers:
+
+```typescript
+function OfferCountdown({ position }) {
+  const [timeLeft, setTimeLeft] = useState(0);
+
+  useEffect(() => {
+    if (position?.status !== "offered") return;
+
+    const interval = setInterval(() => {
+      const left = position.offerExpiresAt! - Date.now();
+      setTimeLeft(Math.max(0, left));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [position]);
+
+  const minutes = Math.floor(timeLeft / 60000);
+  const seconds = Math.floor((timeLeft % 60000) / 1000);
+
+  return (
+    <div className="text-red-600 font-bold">
+      Time remaining: {minutes}:{seconds.toString().padStart(2, "0")}
+    </div>
+  );
+}
+```
+
+## Related Endpoints
+
+- [joinWaitingList](/api/waiting-list/join) - Join the waiting list
+- [processQueue](/api/waiting-list/process-queue) - Process queue and create offers
+- [releaseTicket](/api/waiting-list/release-ticket) - Release an offered ticket

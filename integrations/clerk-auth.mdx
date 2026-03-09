@@ -1,0 +1,337 @@
+---
+title: Clerk Authentication
+description: User authentication and management with Clerk
+icon: user-lock
+---
+
+Ticket Hub uses Clerk for authentication and user management, with automatic synchronization to Convex database.
+
+## Prerequisites
+
+- Clerk account ([clerk.com](https://clerk.com))
+- Next.js application
+- Convex backend configured
+
+## Environment Variables
+
+<CodeGroup>
+
+```bash Server
+CLERK_SECRET_KEY=sk_live_...
+CLERK_WEBHOOK_SECRET=whsec_...
+```
+
+```bash Client
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_...
+NEXT_PUBLIC_CLERK_SIGN_IN_URL=/sign-in
+NEXT_PUBLIC_CLERK_SIGN_UP_URL=/sign-up
+```
+
+</CodeGroup>
+
+## Convex Authentication Config
+
+Configure Clerk as an authentication provider in Convex:
+
+```typescript convex/auth.config.ts
+export default {
+  providers: [
+    {
+      domain: "https://your-clerk-instance.clerk.accounts.dev",
+      applicationID: "convex",
+    },
+  ],
+};
+```
+
+<Note>
+Replace `your-clerk-instance` with your actual Clerk instance domain from your Clerk dashboard.
+</Note>
+
+## Middleware Protection
+
+Protect routes using Clerk middleware:
+
+```typescript src/middleware.ts
+import { clerkMiddleware } from "@clerk/nextjs/server";
+
+export default clerkMiddleware();
+
+export const config = {
+  matcher: [
+    // Skip Next.js internals and static files
+    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    // Always run for API routes
+    "/(api|trpc)(.*)",
+  ],
+};
+```
+
+This configuration:
+- Applies authentication to all routes except static assets
+- Always protects API routes
+- Allows public access by default (customize as needed)
+
+## Webhook Setup
+
+Sync user data from Clerk to Convex using webhooks:
+
+```typescript convex/http.ts
+import type { WebhookEvent } from "@clerk/backend";
+import { httpRouter } from "convex/server";
+import { Webhook } from "svix";
+import { internal } from "./_generated/api";
+import { httpAction } from "./_generated/server";
+
+const http = httpRouter();
+
+http.route({
+  path: "/clerk-users-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const event = await validateRequest(request);
+    if (!event) {
+      return new Response("Error occured", { status: 400 });
+    }
+    
+    switch (event.type) {
+      case "user.created": // intentional fallthrough
+      case "user.updated":
+        await ctx.runMutation(internal.users.upsertUserFromClerk, {
+          data: event.data,
+        });
+        break;
+
+      case "user.deleted": {
+        const clerkUserId = event.data.id!;
+        await ctx.runMutation(internal.users.deleteUser, {
+          userId: clerkUserId,
+        });
+        break;
+      }
+      
+      default:
+        console.log("Ignored Clerk webhook event", event.type);
+    }
+
+    return new Response(null, { status: 200 });
+  }),
+});
+
+async function validateRequest(req: Request): Promise<WebhookEvent | null> {
+  const payloadString = await req.text();
+  const svixHeaders = {
+    "svix-id": req.headers.get("svix-id")!,
+    "svix-timestamp": req.headers.get("svix-timestamp")!,
+    "svix-signature": req.headers.get("svix-signature")!,
+  };
+  const wh = new Webhook(process.env.CLERK_WEBHOOK_SECRET!);
+  try {
+    return wh.verify(payloadString, svixHeaders) as unknown as WebhookEvent;
+  } catch (error) {
+    console.error("Error verifying webhook event", error);
+    return null;
+  }
+}
+
+export default http;
+```
+
+### Webhook Events Handled
+
+<AccordionGroup>
+  <Accordion title="user.created">
+    Creates a new user record in Convex when a user signs up via Clerk.
+    
+    ```typescript
+    await ctx.runMutation(internal.users.upsertUserFromClerk, {
+      data: event.data,
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="user.updated">
+    Updates existing user data in Convex when a user modifies their profile.
+    
+    ```typescript
+    await ctx.runMutation(internal.users.upsertUserFromClerk, {
+      data: event.data,
+    });
+    ```
+  </Accordion>
+
+  <Accordion title="user.deleted">
+    Removes user data from Convex when a user deletes their account.
+    
+    ```typescript
+    await ctx.runMutation(internal.users.deleteUser, {
+      userId: clerkUserId,
+    });
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## User Data Schema
+
+Users are stored in Convex with the following schema:
+
+```typescript convex/schema.ts
+users: defineTable({
+  name: v.string(),
+  email: v.string(),
+  userId: v.string(),
+  phone: v.optional(v.string()),
+  stripeConnectId: v.optional(v.string()),
+})
+  .index("by_user_id", ["userId"])
+  .index("by_email", ["email"])
+```
+
+### Schema Fields
+
+- **name**: User's display name from Clerk
+- **email**: Primary email address
+- **userId**: Clerk user ID (used for authentication)
+- **phone**: Optional phone number
+- **stripeConnectId**: Optional Stripe Connect ID for event organizers
+
+## Accessing User Data
+
+### In Server Actions
+
+```typescript
+import { auth } from "@clerk/nextjs/server";
+
+export async function createEvent() {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Not authenticated");
+  
+  // Use userId to create event
+}
+```
+
+### In Client Components
+
+```typescript
+import { useUser } from "@clerk/nextjs";
+
+export function ProfileButton() {
+  const { user } = useUser();
+  
+  if (!user) return null;
+  
+  return <div>Welcome, {user.firstName}!</div>;
+}
+```
+
+### In Convex Queries
+
+```typescript
+import { query } from "./_generated/server";
+import { v } from "convex/values";
+
+export const getUserTickets = query({
+  args: { userId: v.string() },
+  handler: async (ctx, { userId }) => {
+    return await ctx.db
+      .query("tickets")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .collect();
+  },
+});
+```
+
+## Configuring Clerk Webhooks
+
+1. Go to your Clerk Dashboard
+2. Navigate to **Webhooks** in the sidebar
+3. Click **Add Endpoint**
+4. Configure the endpoint:
+   - **Endpoint URL**: `https://your-convex-deployment.convex.cloud/clerk-users-webhook`
+   - **Subscribe to events**:
+     - `user.created`
+     - `user.updated`
+     - `user.deleted`
+5. Copy the **Signing Secret** and add it to your environment:
+   ```bash
+   CLERK_WEBHOOK_SECRET=whsec_...
+   ```
+
+<Warning>
+Your Convex webhook endpoint must be publicly accessible. Use your production Convex URL, not localhost.
+</Warning>
+
+## Protected Routes
+
+Make routes require authentication:
+
+```typescript src/app/dashboard/page.tsx
+import { auth } from "@clerk/nextjs/server";
+import { redirect } from "next/navigation";
+
+export default async function DashboardPage() {
+  const { userId } = await auth();
+  
+  if (!userId) {
+    redirect("/sign-in");
+  }
+  
+  return <div>Protected Dashboard</div>;
+}
+```
+
+## Custom Sign In/Up Pages
+
+Create custom authentication pages:
+
+```typescript src/app/sign-in/[[...sign-in]]/page.tsx
+import { SignIn } from "@clerk/nextjs";
+
+export default function SignInPage() {
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <SignIn />
+    </div>
+  );
+}
+```
+
+```typescript src/app/sign-up/[[...sign-up]]/page.tsx
+import { SignUp } from "@clerk/nextjs";
+
+export default function SignUpPage() {
+  return (
+    <div className="flex items-center justify-center min-h-screen">
+      <SignUp />
+    </div>
+  );
+}
+```
+
+## Testing
+
+### Test Clerk Integration
+
+1. Start your development server
+2. Navigate to `/sign-up`
+3. Create a test account
+4. Check Convex dashboard to verify user was created
+
+### Test Webhooks Locally
+
+Use Clerk's webhook testing:
+
+1. In Clerk Dashboard, go to your webhook endpoint
+2. Click **Testing** tab
+3. Send test events to verify your handlers work
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Stripe Payments" icon="credit-card" href="/integrations/stripe-payments">
+    Set up payment processing
+  </Card>
+  <Card title="Convex Database" icon="database" href="/integrations/convex-database">
+    Configure your database
+  </Card>
+</CardGroup>

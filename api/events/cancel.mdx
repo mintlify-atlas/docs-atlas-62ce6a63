@@ -1,0 +1,351 @@
+---
+title: "events.cancelEvent"
+description: "Cancel an event and remove it from active listings"
+---
+
+The `events.cancelEvent` mutation cancels an event, removes it from active listings, and clears all waiting list entries. This operation is permanent and can only be performed if there are no active tickets.
+
+## Function Signature
+
+```typescript
+export const cancelEvent = mutation({
+  args: { eventId: v.id("events") },
+  handler: async (ctx, { eventId }) => {
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error("Event not found");
+
+    // Get all valid tickets for this event
+    const tickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "valid"), q.eq(q.field("status"), "used"))
+      )
+      .collect();
+
+    if (tickets.length > 0) {
+      throw new Error(
+        "Cannot cancel event with active tickets. Please refund all tickets first."
+      );
+    }
+
+    // Mark event as cancelled
+    await ctx.db.patch(eventId, {
+      is_cancelled: true,
+    });
+
+    // Delete any waiting list entries
+    const waitingListEntries = await ctx.db
+      .query("waitingList")
+      .withIndex("by_event_status", (q) => q.eq("eventId", eventId))
+      .collect();
+
+    for (const entry of waitingListEntries) {
+      await ctx.db.delete(entry._id);
+    }
+
+    return { success: true };
+  },
+});
+```
+
+**Source**: `convex/events.ts:468-506`
+
+## Parameters
+
+<ParamField path="eventId" type="Id<'events'>" required>
+  The unique identifier of the event to cancel.
+  
+  **Example**: `"k17abc123def456789"`
+</ParamField>
+
+## Returns
+
+<ResponseField name="success" type="boolean">
+  Always returns `true` when the cancellation succeeds.
+</ResponseField>
+
+## Request Example
+
+```typescript
+import { useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+import { refundEventTickets } from "@/actions/refund-event-ticket";
+
+function CancelEventButton({ eventId }) {
+  const cancelEvent = useMutation(api.events.cancelEvent);
+
+  const handleCancel = async () => {
+    // Confirm with user first
+    const confirmed = confirm(
+      "Are you sure you want to cancel this event? " +
+      "All tickets will be refunded and the event will be cancelled permanently."
+    );
+    
+    if (!confirmed) return;
+
+    try {
+      // Step 1: Refund all tickets first (required)
+      await refundEventTickets(eventId);
+      
+      // Step 2: Cancel the event
+      await cancelEvent({ eventId });
+      
+      toast.success("Event cancelled", {
+        description: "All tickets have been refunded successfully.",
+      });
+      
+      router.push("/seller/events");
+    } catch (error) {
+      console.error("Failed to cancel event:", error);
+      toast.error("Failed to cancel event", {
+        description: error.message || "Please try again.",
+      });
+    }
+  };
+}
+```
+
+**Source**: `src/components/cancel-event-button.tsx:23-45`
+
+## Response Example
+
+```json
+{
+  "success": true
+}
+```
+
+## Cancellation Process
+
+The mutation performs the following steps in order:
+
+1. **Verify event exists** - Throws error if eventId is invalid
+2. **Check for active tickets** - Ensures no valid/used tickets exist
+3. **Mark event as cancelled** - Sets `is_cancelled: true` on the event
+4. **Clear waiting lists** - Deletes all waiting list entries for the event
+
+<Warning>
+  **Pre-requisite: Refund All Tickets**
+  
+  Before calling `cancelEvent`, you MUST refund all active tickets. The mutation will fail if there are any tickets with status "valid" or "used".
+  
+  Use the `refundEventTickets` server action to process refunds through Stripe first.
+</Warning>
+
+## Validation & Constraints
+
+### Active Tickets Check
+
+The mutation counts tickets with the following statuses as "active":
+- **valid**: Purchased and not yet used
+- **used**: Ticket has been scanned/used at the event
+
+Tickets with these statuses are NOT considered active:
+- **refunded**: Already refunded
+- **cancelled**: Already cancelled
+
+### Error Conditions
+
+<ResponseField name="Event not found" type="Error">
+  Thrown when the specified eventId doesn't exist in the database.
+  
+  ```typescript
+  throw new Error("Event not found");
+  ```
+</ResponseField>
+
+<ResponseField name="Cannot cancel event with active tickets" type="Error">
+  Thrown when attempting to cancel an event that still has valid or used tickets.
+  
+  ```typescript
+  throw new Error(
+    "Cannot cancel event with active tickets. Please refund all tickets first."
+  );
+  ```
+</ResponseField>
+
+## Complete Cancellation Flow
+
+### Step 1: Check if Event Can Be Cancelled
+
+```typescript
+import { useQuery } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+function EventCancellationCheck({ eventId }) {
+  const availability = useQuery(api.events.getEventAvailability, { eventId });
+  
+  const hasActiveTickets = availability && availability.purchasedCount > 0;
+  
+  if (hasActiveTickets) {
+    return (
+      <div>
+        <p>Cannot cancel: {availability.purchasedCount} tickets sold</p>
+        <p>Please refund all tickets before cancelling</p>
+      </div>
+    );
+  }
+  
+  return <CancelButton eventId={eventId} />;
+}
+```
+
+### Step 2: Refund All Tickets
+
+```typescript
+import { refundEventTickets } from "@/actions/refund-event-ticket";
+
+// Server action that processes Stripe refunds
+try {
+  await refundEventTickets(eventId);
+  console.log("All tickets refunded successfully");
+} catch (error) {
+  console.error("Refund failed:", error);
+  throw error;
+}
+```
+
+**Source**: `src/components/cancel-event-button.tsx:34`
+
+### Step 3: Cancel the Event
+
+```typescript
+const result = await cancelEvent({ eventId });
+// result = { success: true }
+```
+
+## What Happens After Cancellation
+
+Once an event is cancelled:
+
+1. **Event is hidden from listings**
+   - No longer appears in `events.get()` results
+   - Filtered out by `is_cancelled` check
+   - Not shown in search results
+
+2. **Waiting list entries are deleted**
+   - All entries removed from the database
+   - Users are no longer waiting for tickets
+   - No new waiting list entries can be created
+
+3. **Event remains in database**
+   - Marked with `is_cancelled: true`
+   - Historical record preserved
+   - Can still be queried by ID for records
+
+4. **Tickets are preserved**
+   - Existing refunded tickets remain in database
+   - Ticket history maintained for audit purposes
+
+## Cancelled Event Filtering
+
+Cancelled events are automatically filtered from public queries:
+
+```typescript
+// events.get query excludes cancelled events
+export const get = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("is_cancelled"), undefined))
+      .collect();
+  },
+});
+```
+
+**Source**: `convex/events.ts:26-34`
+
+```typescript
+// events.search also excludes cancelled events
+export const search = query({
+  args: { searchTerm: v.string() },
+  handler: async (ctx, { searchTerm }) => {
+    const events = await ctx.db
+      .query("events")
+      .filter((q) => q.eq(q.field("is_cancelled"), undefined))
+      .collect();
+    // ... filtering logic
+  },
+});
+```
+
+**Source**: `convex/events.ts:370-376`
+
+## Error Handling
+
+```typescript
+try {
+  // Step 1: Refund all tickets
+  await refundEventTickets(eventId);
+  
+  // Step 2: Cancel event
+  const result = await cancelEvent({ eventId });
+  
+  if (result.success) {
+    toast.success("Event cancelled successfully");
+    router.push("/seller/events");
+  }
+} catch (error) {
+  console.error("Cancellation failed:", error);
+  
+  if (error.message?.includes("active tickets")) {
+    toast.error("Cannot cancel event", {
+      description: "Please refund all tickets first.",
+    });
+  } else if (error.message === "Event not found") {
+    toast.error("Event not found", {
+      description: "This event may have already been deleted.",
+    });
+  } else {
+    toast.error("Cancellation failed", {
+      description: "Please try again or contact support.",
+    });
+  }
+}
+```
+
+## User Confirmation Dialog
+
+<Tip>
+  Always confirm with the user before cancelling an event, as this action is permanent:
+  
+  ```typescript
+  const confirmed = window.confirm(
+    "Are you sure you want to cancel this event? " +
+    "All tickets will be refunded and the event will be cancelled permanently."
+  );
+  
+  if (!confirmed) {
+    return; // User cancelled the operation
+  }
+  ```
+</Tip>
+
+**Source**: `src/components/cancel-event-button.tsx:24-30`
+
+## Related Endpoints
+
+- [events.getEventAvailability](/api/events) - Check ticket sales before cancellation
+- [tickets.refund](/api/tickets) - Refund individual tickets
+- [events.updateEvent](/api/events/update) - Modify event instead of cancelling
+- [waitingList](/api/waiting-list) - View waiting list entries to be deleted
+
+## Best Practices
+
+<Tip>
+  1. **Always refund tickets first** before calling cancelEvent
+  2. **Confirm with user** using a clear warning dialog
+  3. **Check ticket count** using getEventAvailability before attempting cancellation
+  4. **Notify ticket holders** before processing refunds (send emails)
+  5. **Handle errors gracefully** with specific error messages
+  6. **Log the cancellation** for audit purposes
+  7. **Redirect users** to a safe page after cancellation
+</Tip>
+
+<Warning>
+  **Cancellation is permanent**
+  
+  Once an event is cancelled, it cannot be "uncancelled". The event will be hidden from all listings permanently. Make sure this is the intended action before proceeding.
+</Warning>

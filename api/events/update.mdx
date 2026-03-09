@@ -1,0 +1,366 @@
+---
+title: "events.updateEvent"
+description: "Update an existing event's details and ticket inventory"
+---
+
+The `events.updateEvent` mutation modifies an existing event's information including name, description, location, date, price, and ticket capacity.
+
+## Function Signature
+
+```typescript
+export const updateEvent = mutation({
+  args: {
+    eventId: v.id("events"),
+    name: v.string(),
+    description: v.string(),
+    location: v.string(),
+    eventDate: v.number(),
+    price: v.number(),
+    totalTickets: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { eventId, ...updates } = args;
+
+    // Get current event to check tickets sold
+    const event = await ctx.db.get(eventId);
+    if (!event) throw new Error("Event not found");
+
+    const soldTickets = await ctx.db
+      .query("tickets")
+      .withIndex("by_event", (q) => q.eq("eventId", eventId))
+      .filter((q) =>
+        q.or(q.eq(q.field("status"), "valid"), q.eq(q.field("status"), "used"))
+      )
+      .collect();
+
+    // Ensure new total tickets is not less than sold tickets
+    if (updates.totalTickets < soldTickets.length) {
+      throw new Error(
+        `Cannot reduce total tickets below ${soldTickets.length} (number of tickets already sold)`
+      );
+    }
+
+    await ctx.db.patch(eventId, updates);
+    return eventId;
+  },
+});
+```
+
+**Source**: `convex/events.ts:431-466`
+
+## Parameters
+
+<ParamField path="eventId" type="Id<'events'>" required>
+  The unique identifier of the event to update.
+  
+  **Example**: `"k17abc123def456789"`
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  The updated name of the event.
+  
+  **Example**: `"Summer Music Festival 2026 - Updated"`
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  The updated description of the event.
+  
+  **Example**: `"Join us for an extended evening of live music featuring top local and international artists"`
+</ParamField>
+
+<ParamField path="location" type="string" required>
+  The updated location where the event will take place.
+  
+  **Example**: `"Madison Square Garden, New York, NY"`
+</ParamField>
+
+<ParamField path="eventDate" type="number" required>
+  The updated event date and time as a Unix timestamp in milliseconds.
+  
+  **Example**: `1752624000000`
+</ParamField>
+
+<ParamField path="price" type="number" required>
+  The updated price per ticket in dollars.
+  
+  **Example**: `55.00`
+  
+  <Note>
+    You can change the price at any time. Previously sold tickets retain their original purchase price.
+  </Note>
+</ParamField>
+
+<ParamField path="totalTickets" type="number" required>
+  The updated total number of tickets available.
+  
+  **Example**: `750`
+  
+  <Warning>
+    Cannot be less than the number of tickets already sold (valid or used status).
+  </Warning>
+</ParamField>
+
+## Returns
+
+<ResponseField name="eventId" type="Id<'events'>">
+  The ID of the updated event (same as the input eventId).
+</ResponseField>
+
+## Request Example
+
+```typescript
+import { useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+function EditEventForm({ initialData }) {
+  const updateEvent = useMutation(api.events.updateEvent);
+
+  const handleSubmit = async (formData) => {
+    try {
+      await updateEvent({
+        eventId: initialData._id,
+        name: formData.name,
+        description: formData.description,
+        location: formData.location,
+        eventDate: formData.eventDate.getTime(),
+        price: formData.price,
+        totalTickets: formData.totalTickets,
+      });
+      
+      toast.success("Event updated successfully");
+      router.push(`/event/${initialData._id}`);
+    } catch (error) {
+      console.error("Failed to update event:", error);
+      toast.error(error.message || "Failed to update event");
+    }
+  };
+}
+```
+
+**Source**: `src/components/event-form.tsx:138-142`
+
+## Response Example
+
+```typescript
+// Returns the event ID
+"k17abc123def456789"
+```
+
+## Validation & Constraints
+
+<Warning>
+  **Critical Constraint - Ticket Capacity**
+  
+  The `totalTickets` field cannot be reduced below the number of tickets already sold. The mutation will throw an error if you attempt to do so.
+  
+  ```typescript
+  // Example error:
+  "Cannot reduce total tickets below 150 (number of tickets already sold)"
+  ```
+</Warning>
+
+### Validation Rules
+
+- **eventId**: Must reference an existing event
+- **name**: Cannot be empty
+- **description**: Cannot be empty
+- **location**: Cannot be empty
+- **eventDate**: Must be a valid number (timestamp)
+- **price**: Must be 0 or greater
+- **totalTickets**: Must be >= number of sold tickets (valid + used status)
+
+## Common Errors
+
+### Event Not Found
+
+```typescript
+// Error thrown when eventId doesn't exist
+"Event not found"
+```
+
+### Ticket Capacity Too Low
+
+```typescript
+// Error thrown when trying to reduce capacity below sold tickets
+"Cannot reduce total tickets below 250 (number of tickets already sold)"
+```
+
+Example scenario:
+```typescript
+// Current state: 250 tickets sold out of 500 total
+const soldCount = 250;
+const currentTotal = 500;
+
+// This will fail:
+await updateEvent({
+  eventId,
+  totalTickets: 200, // ❌ Less than 250 sold
+  // ... other fields
+});
+
+// This will succeed:
+await updateEvent({
+  eventId,
+  totalTickets: 750, // ✅ Greater than 250 sold
+  // ... other fields
+});
+```
+
+## Use Cases
+
+### Increasing Ticket Capacity
+
+```typescript
+// Add more tickets to an event
+await updateEvent({
+  eventId: event._id,
+  name: event.name,
+  description: event.description,
+  location: event.location,
+  eventDate: event.eventDate,
+  price: event.price,
+  totalTickets: 1000, // Increased from 500
+});
+```
+
+### Updating Event Details
+
+```typescript
+// Change venue and date
+await updateEvent({
+  eventId: event._id,
+  name: event.name,
+  description: "Updated description with new details",
+  location: "New Venue - Convention Center Hall B",
+  eventDate: new Date("2026-08-15").getTime(), // New date
+  price: event.price,
+  totalTickets: event.totalTickets,
+});
+```
+
+### Changing Pricing
+
+```typescript
+// Update ticket price for remaining tickets
+await updateEvent({
+  eventId: event._id,
+  name: event.name,
+  description: event.description,
+  location: event.location,
+  eventDate: event.eventDate,
+  price: 65.00, // Increased from $45
+  totalTickets: event.totalTickets,
+});
+```
+
+<Note>
+  Price changes only affect new ticket purchases. Previously purchased tickets retain their original price.
+</Note>
+
+## Checking Sold Tickets Before Update
+
+To safely update ticket capacity, first check how many tickets have been sold:
+
+```typescript
+import { useQuery, useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+function EventEditor({ eventId }) {
+  const availability = useQuery(api.events.getEventAvailability, { eventId });
+  const updateEvent = useMutation(api.events.updateEvent);
+
+  const handleCapacityChange = async (newTotal: number) => {
+    if (!availability) return;
+    
+    const soldCount = availability.purchasedCount;
+    
+    if (newTotal < soldCount) {
+      toast.error(
+        `Cannot reduce capacity below ${soldCount} tickets (already sold)`
+      );
+      return;
+    }
+    
+    await updateEvent({
+      eventId,
+      totalTickets: newTotal,
+      // ... other required fields
+    });
+  };
+}
+```
+
+**Related**: `convex/events.ts:448-455`
+
+## Updating Event Images
+
+Event images are managed separately through the Storage API:
+
+```typescript
+import { api } from "../convex/_generated/api";
+
+const updateEventImage = useMutation(api.storage.updateEventImage);
+
+// After updating event details
+if (newImageStorageId) {
+  await updateEventImage({
+    eventId,
+    storageId: newImageStorageId,
+  });
+}
+```
+
+**Source**: `src/components/event-form.tsx:144-153`
+
+## Error Handling Best Practices
+
+```typescript
+try {
+  await updateEvent({
+    eventId: event._id,
+    ...updates,
+  });
+  
+  toast.success("Event updated", {
+    description: "Your event has been successfully updated.",
+  });
+  
+  router.push(`/event/${event._id}`);
+} catch (error) {
+  console.error("Failed to update event:", error);
+  
+  // Handle specific error cases
+  if (error.message?.includes("Cannot reduce total tickets")) {
+    toast.error("Ticket capacity error", {
+      description: error.message,
+    });
+  } else if (error.message === "Event not found") {
+    toast.error("Event not found", {
+      description: "This event may have been deleted.",
+    });
+  } else {
+    toast.error("Update failed", {
+      description: "There was a problem updating your event.",
+    });
+  }
+}
+```
+
+## Related Endpoints
+
+- [events.create](/api/events/create) - Create a new event
+- [events.cancelEvent](/api/events/cancel) - Cancel an event
+- [events.getById](/api/events) - Get current event details
+- [events.getEventAvailability](/api/events) - Check ticket sales status
+- [storage.updateEventImage](/api/storage) - Update event image
+
+## Best Practices
+
+<Tip>
+  1. **Fetch current event data** before updating to populate the form
+  2. **Check sold ticket count** before reducing capacity
+  3. **Validate all fields** client-side before submission
+  4. **Provide clear error messages** when updates fail
+  5. **Consider notification** to ticket holders for major changes (date, location)
+  6. **Keep audit trail** of significant changes for customer support
+</Tip>

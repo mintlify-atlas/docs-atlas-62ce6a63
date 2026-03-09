@@ -1,122 +1,120 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "Ticket Hub",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#6366F1",
+    "light": "#818CF8",
+    "dark": "#4F46E5"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/vishnumouli/ticket-hub"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/vishnumouli/ticket-hub"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Overview",
             "pages": [
-              "index",
-              "quickstart",
-              "development"
+              "introduction",
+              "features"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Getting Started",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "getting-started/quickstart",
+              "getting-started/authentication",
+              "getting-started/environment-setup"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Core Features",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "features/event-management",
+              "features/ticket-purchasing",
+              "features/waiting-list",
+              "features/seller-dashboard"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Integrations",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "integrations/stripe-payments",
+              "integrations/clerk-auth",
+              "integrations/convex-database"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-events",
+              "guides/buying-tickets",
+              "guides/selling-tickets",
+              "guides/managing-refunds"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Events",
             "pages": [
-              "api-reference/introduction"
+              "api/events/overview",
+              "api/events/create",
+              "api/events/update",
+              "api/events/cancel",
+              "api/events/search"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Tickets",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/tickets/overview",
+              "api/tickets/purchase",
+              "api/tickets/get-user-tickets",
+              "api/tickets/update-status"
+            ]
+          },
+          {
+            "group": "Waiting List",
+            "pages": [
+              "api/waiting-list/overview",
+              "api/waiting-list/join",
+              "api/waiting-list/get-position",
+              "api/waiting-list/process-queue"
+            ]
+          },
+          {
+            "group": "Users",
+            "pages": [
+              "api/users/overview",
+              "api/users/get-user",
+              "api/users/stripe-connect"
+            ]
+          },
+          {
+            "group": "Actions",
+            "pages": [
+              "api/actions/stripe-checkout",
+              "api/actions/stripe-connect",
+              "api/actions/refunds"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

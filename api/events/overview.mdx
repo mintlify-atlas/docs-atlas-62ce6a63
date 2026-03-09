@@ -1,0 +1,189 @@
+---
+title: "Events API Overview"
+description: "Complete guide to the Events API for creating, managing, and searching events in Ticket Hub"
+---
+
+The Events API provides a comprehensive set of queries and mutations for managing events in the Ticket Hub platform. This API enables event creation, updates, cancellation, and searching functionality.
+
+## Available Endpoints
+
+### Mutations
+
+<CardGroup cols={2}>
+  <Card title="Create Event" icon="plus" href="/api/events/create">
+    Create a new event with tickets
+  </Card>
+  <Card title="Update Event" icon="pen" href="/api/events/update">
+    Modify existing event details
+  </Card>
+  <Card title="Cancel Event" icon="ban" href="/api/events/cancel">
+    Cancel an event and clear waiting lists
+  </Card>
+</CardGroup>
+
+### Queries
+
+<CardGroup cols={2}>
+  <Card title="Search Events" icon="magnifying-glass" href="/api/events/search">
+    Search events by name, description, or location
+  </Card>
+  <Card title="Get Events" icon="list">
+    Retrieve all active events
+  </Card>
+  <Card title="Get Event by ID" icon="eye">
+    Fetch a specific event by ID
+  </Card>
+  <Card title="Get Event Availability" icon="ticket">
+    Check ticket availability for an event
+  </Card>
+</CardGroup>
+
+## Event Object Structure
+
+All event endpoints work with the following event object schema:
+
+<ResponseField name="_id" type="Id<'events'>" required>
+  Unique identifier for the event
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Name of the event
+</ResponseField>
+
+<ResponseField name="description" type="string" required>
+  Detailed description of the event
+</ResponseField>
+
+<ResponseField name="location" type="string" required>
+  Physical location where the event takes place
+</ResponseField>
+
+<ResponseField name="eventDate" type="number" required>
+  Event date and time stored as Unix timestamp in milliseconds
+</ResponseField>
+
+<ResponseField name="price" type="number" required>
+  Price per ticket in dollars (minimum: 0)
+</ResponseField>
+
+<ResponseField name="totalTickets" type="number" required>
+  Total number of tickets available for the event (minimum: 1)
+</ResponseField>
+
+<ResponseField name="userId" type="string" required>
+  ID of the user who created the event (event organizer)
+</ResponseField>
+
+<ResponseField name="imageStorageId" type="Id<'_storage'>" optional>
+  Reference to the stored event image
+</ResponseField>
+
+<ResponseField name="is_cancelled" type="boolean" optional>
+  Whether the event has been cancelled
+</ResponseField>
+
+## Key Concepts
+
+### Event States
+
+Events can be in one of the following states:
+
+- **Active**: Normal operating state, accepts ticket purchases
+- **Cancelled**: Event has been cancelled (`is_cancelled: true`), no longer visible in listings
+- **Past**: Event date has passed but event is still in the system
+
+### Ticket Availability
+
+Ticket availability is calculated as:
+
+```typescript
+availableSpots = totalTickets - (purchasedCount + activeOffers)
+```
+
+Where:
+- `purchasedCount`: Tickets with status "valid" or "used"
+- `activeOffers`: Waiting list entries with status "offered" and non-expired offers
+
+### Validation Rules
+
+<Warning>
+  All event mutations enforce the following validation rules:
+  
+  - Event name, description, and location cannot be empty
+  - Event date must be stored as a timestamp (milliseconds since epoch)
+  - Price must be 0 or greater
+  - Total tickets must be at least 1
+  - When updating, total tickets cannot be reduced below the number already sold
+</Warning>
+
+## Common Use Cases
+
+### Creating an Event
+
+```typescript
+import { useMutation } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+const createEvent = useMutation(api.events.create);
+
+const eventId = await createEvent({
+  name: "Summer Music Festival",
+  description: "Annual outdoor music festival featuring local artists",
+  location: "Central Park Amphitheater",
+  eventDate: new Date("2026-07-15").getTime(),
+  price: 45.00,
+  totalTickets: 500,
+  userId: user.id
+});
+```
+
+### Searching for Events
+
+```typescript
+import { useQuery } from "convex/react";
+import { api } from "../convex/_generated/api";
+
+const searchResults = useQuery(api.events.search, { 
+  searchTerm: "music" 
+});
+```
+
+### Checking Availability
+
+```typescript
+const availability = useQuery(api.events.getEventAvailability, { 
+  eventId: "event_id_here" 
+});
+
+if (availability?.isSoldOut) {
+  // Show sold out message
+} else {
+  // Show remaining tickets: availability.remainingTickets
+}
+```
+
+## Error Handling
+
+All mutations can throw the following errors:
+
+- **"Event not found"**: The specified event ID doesn't exist
+- **"Event is no longer active"**: Attempting to modify a cancelled event
+- **Validation errors**: When input parameters don't meet requirements
+
+Always wrap API calls in try-catch blocks:
+
+```typescript
+try {
+  await updateEvent({ eventId, ...updates });
+  toast.success("Event updated successfully");
+} catch (error) {
+  console.error("Failed to update event:", error);
+  toast.error("Failed to update event. Please try again.");
+}
+```
+
+## Related APIs
+
+- [Waiting List API](/api/waiting-list) - Join queues and manage ticket offers
+- [Tickets API](/api/tickets) - Purchase and manage tickets
+- [Storage API](/api/storage) - Upload and manage event images
